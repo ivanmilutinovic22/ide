@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -202,7 +203,11 @@ func startupCommand(command string) string {
 		return ""
 	}
 	script := strings.TrimSpace(command) + `; exec "${SHELL:-/bin/sh}" -i`
-	return "sh -lc " + shellQuote(script)
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	return shell + " -lc " + shellQuote(script)
 }
 
 func shellQuote(value string) string {
