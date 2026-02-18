@@ -1619,7 +1619,7 @@ func paneBoxStyle(width, height int, focused bool) lipgloss.Style {
 	if focused {
 		baseStyle = focusedPaneStyle
 	}
-	return baseStyle.Width(width).Height(height).Padding(0, 1)
+	return baseStyle.Width(width - 2).Height(height).Padding(0, 1)
 }
 
 func splitPaneWidths(total int) (int, int) {
@@ -1686,7 +1686,7 @@ func modalPopupDimensions(bodyWidth, bodyHeight, desiredWidth, desiredHeight int
 }
 
 func paneContentWidth(width int) int {
-	contentWidth := width - paneStyle.GetHorizontalFrameSize()
+	contentWidth := width - paneStyle.GetHorizontalFrameSize() - 2 // -2 for Padding(0,1) added in paneBoxStyle
 	if contentWidth < 0 {
 		return 0
 	}
