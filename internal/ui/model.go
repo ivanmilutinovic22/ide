@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,6 +63,21 @@ var (
 			Background(lipgloss.Color("236")).
 			ColorWhitespace(true)
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	windowBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("242")).
+			BorderBackground(lipgloss.Color("236")).
+			Background(lipgloss.Color("236")).
+			Foreground(lipgloss.Color("244")).
+			Padding(0, 1)
+	selectedWindowBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("220")).
+			BorderBackground(lipgloss.Color("236")).
+			Background(lipgloss.Color("236")).
+			Foreground(lipgloss.Color("220")).
+			Bold(true).
+			Padding(0, 1)
 )
 
 const (
@@ -137,6 +153,10 @@ type Model struct {
 	themes                []uiTheme
 	themeIndex            int
 	status                string
+	previewContent        string
+	previewSession        string
+	previewWindow         string
+	previewProcess        string
 }
 
 type configLoadedMsg struct {
@@ -200,6 +220,13 @@ type environmentDeletedMsg struct {
 type themePersistedMsg struct {
 	name string
 	err  error
+}
+
+type panePreviewMsg struct {
+	session string
+	window  string
+	content string
+	process string
 }
 
 func defaultThemes() []uiTheme {
@@ -572,6 +599,21 @@ func applyThemeStyles(theme uiTheme) {
 		Background(lipgloss.Color(theme.PaneBG)).
 		ColorWhitespace(true)
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Status)).Background(lipgloss.Color(theme.AppBG)).ColorWhitespace(true)
+	windowBoxStyle = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Muted)).
+		BorderBackground(lipgloss.Color(theme.PaneBG)).
+		Background(lipgloss.Color(theme.PaneBG)).
+		Foreground(lipgloss.Color(theme.Muted)).
+		Padding(0, 1)
+	selectedWindowBoxStyle = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(theme.Accent)).
+		BorderBackground(lipgloss.Color(theme.PaneBG)).
+		Background(lipgloss.Color(theme.PaneBG)).
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true).
+		Padding(0, 1)
 }
 
 func (m *Model) applyCurrentTheme() {
@@ -788,7 +830,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if pane, ok := parsePaneShortcut(key); ok {
 			m.focusPane = pane
 			m.status = focusedPaneStatus(pane)
-			return m, nil
+			return m, m.captureCurrentWindowCmd()
 		}
 		switch key {
 		case "q", "ctrl+c":
@@ -796,7 +838,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab":
 			m.toggleFocusPane()
 			m.status = focusedPaneStatus(m.focusPane)
-			return m, nil
+			return m, m.captureCurrentWindowCmd()
 		case "r":
 			m.status = "Refreshing..."
 			return m, tea.Batch(loadConfigCmd(), loadSessionsCmd())
@@ -870,6 +912,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessionWindows[session] = windows
 		}
 		m.normalizeSelection()
+		return m, m.captureCurrentWindowCmd()
+
+	case panePreviewMsg:
+		m.previewContent = msg.content
+		m.previewSession = msg.session
+		m.previewWindow = msg.window
+		m.previewProcess = msg.process
 		return m, nil
 
 	case themePersistedMsg:
@@ -1148,10 +1197,10 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
 		m.moveEnv(-1)
-		return m, nil
+		return m, m.captureCurrentWindowCmd()
 	case "down", "j":
 		m.moveEnv(1)
-		return m, nil
+		return m, m.captureCurrentWindowCmd()
 	case "a":
 		m.createMode = true
 		m.templateMode = false
@@ -1186,10 +1235,10 @@ func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "left", "h", "up", "k":
 		m.moveWindow(-1)
-		return m, nil
+		return m, m.captureCurrentWindowCmd()
 	case "right", "l", "down", "j":
 		m.moveWindow(1)
-		return m, nil
+		return m, m.captureCurrentWindowCmd()
 	case "x", "d":
 		m.status = "Switch to [1] Sessions panel for this action"
 		return m, nil
@@ -1644,6 +1693,26 @@ func paneContentWidth(width int) int {
 	return contentWidth
 }
 
+// blendColors blends fg toward bg by alpha (1.0 = full fg, 0.0 = full bg).
+// Both colors must be 6-digit hex strings with or without leading "#".
+func blendColors(fg, bg string, alpha float64) string {
+	fg = strings.TrimPrefix(strings.TrimSpace(fg), "#")
+	bg = strings.TrimPrefix(strings.TrimSpace(bg), "#")
+	if len(fg) != 6 || len(bg) != 6 {
+		return "#" + fg
+	}
+	parse := func(s string) (int64, int64, int64) {
+		r, _ := strconv.ParseInt(s[0:2], 16, 64)
+		g, _ := strconv.ParseInt(s[2:4], 16, 64)
+		b, _ := strconv.ParseInt(s[4:6], 16, 64)
+		return r, g, b
+	}
+	fr, fg2, fb := parse(fg)
+	br, bg2, bb := parse(bg)
+	blend := func(a, b int64) int { return int(float64(a)*alpha + float64(b)*(1-alpha)) }
+	return fmt.Sprintf("#%02x%02x%02x", blend(fr, br), blend(fg2, bg2), blend(fb, bb))
+}
+
 func padLineToWidth(line string, width int) string {
 	if width <= 0 {
 		return line
@@ -1941,28 +2010,26 @@ func (m Model) renderTemplatesPane(width, height int) string {
 }
 
 func (m Model) renderDetailsPane(width, height int) string {
-	rows := make([]string, 0, 12)
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneWindows
 	borderTitle := panelBorderTitle(2, "Windows", focused)
 	env, ok := m.currentEnv()
 	if !ok {
-		rows = append(rows, "")
-		rows = append(rows, "No environment selected.")
-		return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+		body := strings.Join([]string{"", "No environment selected."}, "\n")
+		return renderPaneWithBorderTitle(width, height, borderTitle, body, focused)
 	}
+
+	contentWidth := paneContentWidth(width)
 
 	windows := m.currentWindowNames()
 	tabs := make([]string, 0, len(windows))
 	for i, w := range windows {
-		label := w
 		if i == m.selectedWindow {
-			tabs = append(tabs, selectedTabStyle.Render(label))
+			tabs = append(tabs, selectedWindowBoxStyle.Render(w))
 		} else {
-			tabs = append(tabs, tabStyle.Render(label))
+			tabs = append(tabs, windowBoxStyle.Render(w))
 		}
 	}
-	separator := tabStyle.Render(" - ")
-	tabsLine := strings.Join(tabs, separator)
+	tabsLine := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
 	selectedWindowName := ""
 	selectedWindowCmd := ""
@@ -1982,24 +2049,79 @@ func (m Model) renderDetailsPane(width, height int) string {
 		}
 	}
 
-	rows = append(rows, tabsLine)
-	rows = append(rows, "")
-	rows = append(rows, fmt.Sprintf("Environment: %s", env.Name))
-	rows = append(rows, fmt.Sprintf("Root: %s", env.Root))
-	rows = append(rows, fmt.Sprintf("Session: %s", session))
-	rows = append(rows, fmt.Sprintf("Window: %s", selectedWindowName))
-	rows = append(rows, fmt.Sprintf("Cwd: %s", selectedWindowCwd))
-	if usingLiveWindows {
-		rows = append(rows, "Source: live tmux windows")
-	} else {
-		rows = append(rows, "Source: template windows")
+	theme := m.currentTheme()
+	infoLineStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Muted)).
+		Background(lipgloss.Color(theme.SelectedBG)).
+		ColorWhitespace(true)
+
+	// Top section: tabs + shaded info lines.
+	// tabsLine is 3 visual lines (bordered boxes); each other entry is 1 line.
+	topRows := []string{tabsLine, ""}
+	if strings.TrimSpace(selectedWindowCwd) != "" {
+		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Cwd: %s", selectedWindowCwd), contentWidth))
 	}
 	if strings.TrimSpace(selectedWindowCmd) != "" {
-		rows = append(rows, fmt.Sprintf("Cmd: %s", selectedWindowCmd))
+		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Cmd: %s", selectedWindowCmd), contentWidth))
 	}
-	rows = append(rows, "")
+	if usingLiveWindows && m.previewSession == session && m.previewWindow == selectedWindowName && strings.TrimSpace(m.previewProcess) != "" {
+		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Running: %s", m.previewProcess), contentWidth))
+	}
+	topRows = append(topRows, "") // blank separator before preview
 
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+	// tabsLine contributes 3 visual lines; every other entry contributes 1.
+	tabsVisualHeight := strings.Count(tabsLine, "\n") + 1
+	topVisualHeight := tabsVisualHeight + (len(topRows) - 1)
+
+	// Preview fills the remaining space below the top section.
+	contentHeight := height - 2 // subtract top + bottom borders
+	previewHeight := contentHeight - topVisualHeight
+	if previewHeight < 0 {
+		previewHeight = 0
+	}
+
+	previewRows := make([]string, 0, previewHeight)
+	hasPreview := usingLiveWindows &&
+		m.previewSession == session &&
+		m.previewWindow == selectedWindowName &&
+		strings.TrimSpace(m.previewContent) != ""
+
+	if hasPreview && previewHeight > 0 {
+		captureLines := strings.Split(strings.TrimRight(m.previewContent, "\n"), "\n")
+		start := len(captureLines) - previewHeight
+		if start < 0 {
+			start = 0
+		}
+		for _, line := range captureLines[start:] {
+			line = strings.TrimRight(line, " \t")
+			runes := []rune(line)
+			if len(runes) > contentWidth {
+				runes = runes[:contentWidth]
+			}
+			previewRows = append(previewRows, string(runes))
+		}
+	} else if !usingLiveWindows && previewHeight > 0 {
+		placeholder := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Inactive)).Render("No active session")
+		previewRows = append(previewRows, placeholder)
+	}
+
+	// Pad preview to exact height.
+	for len(previewRows) < previewHeight {
+		previewRows = append(previewRows, "")
+	}
+
+	// Fade the last few preview lines into the background.
+	fadeAlphas := []float64{0.55, 0.3, 0.12, 0.04}
+	for i, alpha := range fadeAlphas {
+		idx := len(previewRows) - len(fadeAlphas) + i
+		if idx >= 0 && idx < len(previewRows) {
+			col := blendColors(theme.AppFG, theme.PaneBG, alpha)
+			previewRows[idx] = lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render(previewRows[idx])
+		}
+	}
+
+	allRows := append(topRows, previewRows...)
+	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(allRows, "\n"), focused)
 }
 
 func (m Model) renderCreatePane(width, height int) string {
@@ -2870,4 +2992,28 @@ func execAttachCmd(target string) tea.Cmd {
 	return tea.ExecProcess(proc, func(err error) tea.Msg {
 		return attachDoneMsg{err: err}
 	})
+}
+
+func capturePaneCmd(session, window string) tea.Cmd {
+	return func() tea.Msg {
+		content, _ := tmux.CapturePane(session, window)
+		process := tmux.CurrentProcess(session, window)
+		return panePreviewMsg{session: session, window: window, content: content, process: process}
+	}
+}
+
+func (m Model) captureCurrentWindowCmd() tea.Cmd {
+	env, ok := m.currentEnv()
+	if !ok {
+		return nil
+	}
+	session := tmux.SessionName(env.Name)
+	if _, live := m.sessions[session]; !live {
+		return nil
+	}
+	windows := m.currentWindowNames()
+	if len(windows) == 0 || m.selectedWindow >= len(windows) {
+		return nil
+	}
+	return capturePaneCmd(session, windows[m.selectedWindow])
 }

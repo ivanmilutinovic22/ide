@@ -212,6 +212,28 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
+func CurrentProcess(session, window string) string {
+	target := session + ":" + safeWindowName(window)
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func CapturePane(session, window string) (string, error) {
+	target := session + ":" + safeWindowName(window)
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-t", target)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return "", nil
+	}
+	return out.String(), nil
+}
+
 func CheckTmuxExists() error {
 	_, err := exec.LookPath("tmux")
 	if err != nil {
