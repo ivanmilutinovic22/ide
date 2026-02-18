@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,20 +63,12 @@ var (
 			ColorWhitespace(true)
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	windowBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("242")).
-			BorderBackground(lipgloss.Color("236")).
 			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("244")).
-			Padding(0, 1)
+			Foreground(lipgloss.Color("244"))
 	selectedWindowBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("220")).
-			BorderBackground(lipgloss.Color("236")).
 			Background(lipgloss.Color("236")).
 			Foreground(lipgloss.Color("220")).
-			Bold(true).
-			Padding(0, 1)
+			Bold(true)
 )
 
 const (
@@ -600,20 +591,12 @@ func applyThemeStyles(theme uiTheme) {
 		ColorWhitespace(true)
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Status)).Background(lipgloss.Color(theme.AppBG)).ColorWhitespace(true)
 	windowBoxStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(theme.Muted)).
-		BorderBackground(lipgloss.Color(theme.PaneBG)).
 		Background(lipgloss.Color(theme.PaneBG)).
-		Foreground(lipgloss.Color(theme.Muted)).
-		Padding(0, 1)
+		Foreground(lipgloss.Color(theme.Muted))
 	selectedWindowBoxStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(theme.Accent)).
-		BorderBackground(lipgloss.Color(theme.PaneBG)).
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.Accent)).
-		Bold(true).
-		Padding(0, 1)
+		Bold(true)
 }
 
 func (m *Model) applyCurrentTheme() {
@@ -1693,25 +1676,6 @@ func paneContentWidth(width int) int {
 	return contentWidth
 }
 
-// blendColors blends fg toward bg by alpha (1.0 = full fg, 0.0 = full bg).
-// Both colors must be 6-digit hex strings with or without leading "#".
-func blendColors(fg, bg string, alpha float64) string {
-	fg = strings.TrimPrefix(strings.TrimSpace(fg), "#")
-	bg = strings.TrimPrefix(strings.TrimSpace(bg), "#")
-	if len(fg) != 6 || len(bg) != 6 {
-		return "#" + fg
-	}
-	parse := func(s string) (int64, int64, int64) {
-		r, _ := strconv.ParseInt(s[0:2], 16, 64)
-		g, _ := strconv.ParseInt(s[2:4], 16, 64)
-		b, _ := strconv.ParseInt(s[4:6], 16, 64)
-		return r, g, b
-	}
-	fr, fg2, fb := parse(fg)
-	br, bg2, bb := parse(bg)
-	blend := func(a, b int64) int { return int(float64(a)*alpha + float64(b)*(1-alpha)) }
-	return fmt.Sprintf("#%02x%02x%02x", blend(fr, br), blend(fg2, bg2), blend(fb, bb))
-}
 
 func padLineToWidth(line string, width int) string {
 	if width <= 0 {
@@ -2029,7 +1993,10 @@ func (m Model) renderDetailsPane(width, height int) string {
 			tabs = append(tabs, windowBoxStyle.Render(w))
 		}
 	}
-	tabsLine := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	sepStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(m.currentTheme().PaneBG)).
+		Foreground(lipgloss.Color(m.currentTheme().Muted))
+	tabsLine := strings.Join(tabs, sepStyle.Render(" - "))
 
 	selectedWindowName := ""
 	selectedWindowCmd := ""
@@ -2069,9 +2036,8 @@ func (m Model) renderDetailsPane(width, height int) string {
 	}
 	topRows = append(topRows, "") // blank separator before preview
 
-	// tabsLine contributes 3 visual lines; every other entry contributes 1.
-	tabsVisualHeight := strings.Count(tabsLine, "\n") + 1
-	topVisualHeight := tabsVisualHeight + (len(topRows) - 1)
+	// tabsLine contributes 1 visual line; every other entry contributes 1.
+	topVisualHeight := len(topRows)
 
 	// Preview fills the remaining space below the top section.
 	contentHeight := height - 2 // subtract top + bottom borders
@@ -2110,15 +2076,6 @@ func (m Model) renderDetailsPane(width, height int) string {
 		previewRows = append(previewRows, "")
 	}
 
-	// Fade the last few preview lines into the background.
-	fadeAlphas := []float64{0.55, 0.3, 0.12, 0.04}
-	for i, alpha := range fadeAlphas {
-		idx := len(previewRows) - len(fadeAlphas) + i
-		if idx >= 0 && idx < len(previewRows) {
-			col := blendColors(theme.AppFG, theme.PaneBG, alpha)
-			previewRows[idx] = lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render(previewRows[idx])
-		}
-	}
 
 	allRows := append(topRows, previewRows...)
 	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(allRows, "\n"), focused)
