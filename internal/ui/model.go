@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -122,19 +123,19 @@ type Model struct {
 	sessionWindows        map[string][]string
 	createMode            bool
 	createField           int
-	createName            string
-	createRoot            string
+	createName            textinput.Model
+	createRoot            textinput.Model
 	createTemplate        int
-	createCustom          string
+	createCustom          textinput.Model
 	templateMode          bool
 	templateField         int
-	templateName          string
-	templateSpec          string
+	templateName          textinput.Model
+	templateSpec          textinput.Model
 	templateEditing       bool
 	templateOrigin        string
 	showShortcuts         bool
 	showThemePicker       bool
-	themeQuery            string
+	themeQuery            textinput.Model
 	themePickerCursor     int
 	killConfirm           string
 	deleteConfirm         string
@@ -648,7 +649,7 @@ func (m Model) themeIndexByName(name string) (int, bool) {
 }
 
 func (m Model) filteredThemeIndices() []int {
-	query := strings.ToLower(strings.TrimSpace(m.themeQuery))
+	query := strings.ToLower(strings.TrimSpace(m.themeQuery.Value()))
 	indices := make([]int, 0, len(m.themes))
 	for idx := range m.themes {
 		if query == "" || strings.Contains(strings.ToLower(m.themes[idx].Name), query) {
@@ -672,11 +673,12 @@ func (m *Model) normalizeThemePickerCursor() {
 	}
 }
 
-func (m *Model) openThemePicker() {
+func (m *Model) openThemePicker() tea.Cmd {
 	m.showThemePicker = true
 	m.showShortcuts = false
-	m.themeQuery = ""
+	m.themeQuery.SetValue("")
 	m.themePickerCursor = 0
+	m.themeQuery.Focus()
 	indices := m.filteredThemeIndices()
 	for i, themeIdx := range indices {
 		if themeIdx == m.themeIndex {
@@ -684,13 +686,39 @@ func (m *Model) openThemePicker() {
 			break
 		}
 	}
+	return textinput.Blink
+}
+
+func (m *Model) focusCreateField() {
+	m.createName.Blur()
+	m.createRoot.Blur()
+	m.createCustom.Blur()
+	switch m.createField {
+	case createFieldName:
+		m.createName.Focus()
+	case createFieldRoot:
+		m.createRoot.Focus()
+	case createFieldCustomWindows:
+		m.createCustom.Focus()
+	}
+}
+
+func (m *Model) focusTemplateField() {
+	m.templateName.Blur()
+	m.templateSpec.Blur()
+	switch m.templateField {
+	case templateFieldName:
+		m.templateName.Focus()
+	case templateFieldWindows:
+		m.templateSpec.Focus()
+	}
 }
 
 func (m Model) updateThemePickerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	switch key {
+	switch msg.String() {
 	case "esc":
 		m.showThemePicker = false
+		m.themeQuery.Blur()
 		m.status = "Theme picker closed."
 		return m, nil
 	case "q", "ctrl+c":
@@ -703,14 +731,6 @@ func (m Model) updateThemePickerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.themePickerCursor++
 		m.normalizeThemePickerCursor()
 		return m, nil
-	case "backspace", "ctrl+h":
-		m.themeQuery = trimLastRune(m.themeQuery)
-		m.normalizeThemePickerCursor()
-		return m, nil
-	case "ctrl+u":
-		m.themeQuery = ""
-		m.normalizeThemePickerCursor()
-		return m, nil
 	case "enter":
 		indices := m.filteredThemeIndices()
 		if len(indices) == 0 {
@@ -721,16 +741,24 @@ func (m Model) updateThemePickerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.themeIndex = selectedThemeIndex
 		m.applyCurrentTheme()
 		m.showThemePicker = false
+		m.themeQuery.Blur()
 		themeName := m.currentThemeName()
 		m.status = "Theme: " + themeName
 		return m, saveThemePreferenceCmd(themeName)
-	}
-
-	if len(msg.Runes) > 0 && !msg.Alt {
-		m.themeQuery += string(msg.Runes)
+	default:
+		var cmd tea.Cmd
+		m.themeQuery, cmd = m.themeQuery.Update(msg)
 		m.normalizeThemePickerCursor()
+		return m, cmd
 	}
-	return m, nil
+}
+
+func newTextInput(prompt, placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = prompt
+	ti.Placeholder = placeholder
+	ti.CharLimit = 0
+	return ti
 }
 
 func NewModel() Model {
@@ -741,6 +769,12 @@ func NewModel() Model {
 		themes:         defaultThemes(),
 		status:         "Loading environments...",
 	}
+	m.createName = newTextInput("Name: ", "<environment-name>")
+	m.createRoot = newTextInput("Root: ", "<path/to/project>")
+	m.createCustom = newTextInput("Windows: ", "<cmd>:<cwd>, ...")
+	m.templateName = newTextInput("Name: ", "<template-name>")
+	m.templateSpec = newTextInput("Windows: ", "<cmd>:<cwd>, ...")
+	m.themeQuery = newTextInput("", "<type to filter themes>")
 	m.applyCurrentTheme()
 	return m
 }
@@ -761,12 +795,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key == "ctrl+t" {
 			if m.showThemePicker {
 				m.showThemePicker = false
+				m.themeQuery.Blur()
 				m.status = "Theme picker closed."
-			} else {
-				m.openThemePicker()
-				m.status = "Theme picker open. Type to filter, Enter to apply."
+				return m, nil
 			}
-			return m, nil
+			cmd := m.openThemePicker()
+			m.status = "Theme picker open. Type to filter, Enter to apply."
+			return m, cmd
 		}
 		if key == "?" {
 			m.showThemePicker = false
@@ -934,11 +969,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.createMode = false
-		m.createName = ""
-		m.createRoot = ""
+		m.createName.SetValue("")
+		m.createRoot.SetValue("")
+		m.createName.Blur()
+		m.createRoot.Blur()
+		m.createCustom.Blur()
 		m.createField = createFieldName
 		m.createTemplate = m.defaultTemplateIndex()
-		m.createCustom = ""
+		m.createCustom.SetValue("")
 		m.pendingSelect = msg.env.Name
 		if msg.sessionErr != nil {
 			m.status = "Environment saved, but tmux session was not created: " + msg.sessionErr.Error()
@@ -976,8 +1014,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.templateEditing = false
 		m.templateOrigin = ""
 		m.templateField = templateFieldName
-		m.templateName = ""
-		m.templateSpec = ""
+		m.templateName.SetValue("")
+		m.templateSpec.SetValue("")
+		m.templateName.Blur()
+		m.templateSpec.Blur()
 		m.pendingTemplateSelect = msg.name
 		if msg.edited {
 			m.status = "Template updated: " + msg.name
@@ -1016,6 +1056,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Deleted environment " + msg.environment
 		}
 		return m, tea.Batch(loadConfigCmd(), loadSessionsCmd())
+	}
+
+	// Route unhandled messages (e.g. cursor blink ticks) to the focused textinput.
+	if m.createMode || m.templateMode || m.showThemePicker {
+		var cmd tea.Cmd
+		if m.createMode {
+			switch m.createField {
+			case createFieldName:
+				m.createName, cmd = m.createName.Update(msg)
+			case createFieldRoot:
+				m.createRoot, cmd = m.createRoot.Update(msg)
+			case createFieldCustomWindows:
+				m.createCustom, cmd = m.createCustom.Update(msg)
+			}
+		} else if m.templateMode {
+			switch m.templateField {
+			case templateFieldName:
+				m.templateName, cmd = m.templateName.Update(msg)
+			case templateFieldWindows:
+				m.templateSpec, cmd = m.templateSpec.Update(msg)
+			}
+		} else if m.showThemePicker {
+			m.themeQuery, cmd = m.themeQuery.Update(msg)
+		}
+		return m, cmd
 	}
 
 	return m, nil
@@ -1188,12 +1253,13 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.createMode = true
 		m.templateMode = false
 		m.createField = createFieldName
-		m.createName = ""
-		m.createRoot = ""
+		m.createName.SetValue("")
+		m.createRoot.SetValue("")
 		m.createTemplate = m.defaultTemplateIndex()
-		m.createCustom = ""
+		m.createCustom.SetValue("")
+		m.focusCreateField()
 		m.status = "Create mode: enter environment name and root path."
-		return m, nil
+		return m, textinput.Blink
 	case "t":
 		m.status = "Switch to [3] Templates panel for template actions"
 		return m, nil
@@ -1251,7 +1317,7 @@ func (m Model) updateTemplatesPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.moveTemplate(1)
 		return m, nil
 	case "a":
-		return m.openCreateTemplateMode(), nil
+		return m.openCreateTemplateMode()
 	case "e", "enter":
 		return m.startEditTemplateMode()
 	case "d":
@@ -1291,16 +1357,17 @@ func (m Model) currentTemplate() (config.Template, bool) {
 	return m.templates[m.selectedTemplate], true
 }
 
-func (m Model) openCreateTemplateMode() Model {
+func (m Model) openCreateTemplateMode() (Model, tea.Cmd) {
 	m.templateMode = true
 	m.createMode = false
 	m.templateField = templateFieldName
-	m.templateName = ""
-	m.templateSpec = ""
+	m.templateName.SetValue("")
+	m.templateSpec.SetValue("")
 	m.templateEditing = false
 	m.templateOrigin = ""
+	m.focusTemplateField()
 	m.status = "Template mode: name and window spec."
-	return m
+	return m, textinput.Blink
 }
 
 func (m Model) startEditTemplateMode() (tea.Model, tea.Cmd) {
@@ -1312,12 +1379,13 @@ func (m Model) startEditTemplateMode() (tea.Model, tea.Cmd) {
 	m.templateMode = true
 	m.createMode = false
 	m.templateField = templateFieldName
-	m.templateName = tpl.Name
-	m.templateSpec = formatWindowSpec(tpl.Windows)
+	m.templateName.SetValue(tpl.Name)
+	m.templateSpec.SetValue(formatWindowSpec(tpl.Windows))
 	m.templateEditing = true
 	m.templateOrigin = tpl.Name
+	m.focusTemplateField()
 	m.status = "Edit template mode."
-	return m, nil
+	return m, textinput.Blink
 }
 
 func (m Model) startDeleteTemplate() (tea.Model, tea.Cmd) {
@@ -2085,42 +2153,28 @@ func (m Model) renderCreatePane(width, height int) string {
 	rows := make([]string, 0, 20)
 	contentWidth := paneContentWidth(width)
 
-	name := m.createName
-	if name == "" {
-		name = "<environment-name>"
+	inputW := func(prompt string) int {
+		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
+		if w < 1 {
+			w = 1
+		}
+		return w
 	}
-	root := m.createRoot
-	if root == "" {
-		root = "<path/to/project>"
-	}
-	templateName := m.selectedCreateTemplateName()
-	custom := m.createCustom
-	if custom == "" {
-		custom = "<editor=nvim .;terminal;lazygit=lazygit>"
-	}
+	m.createName.Width = inputW(m.createName.Prompt)
+	m.createRoot.Width = inputW(m.createRoot.Prompt)
+	m.createCustom.Width = inputW(m.createCustom.Prompt)
 
-	nameLine := "Name: " + name
-	rootLine := "Root: " + root
+	templateName := m.selectedCreateTemplateName()
 	templateLine := "Template: " + templateName
-	customLine := "Custom windows: " + custom
-	if m.createField == createFieldName {
-		nameLine = renderStyledPaneLine(selectedLineStyle, nameLine, contentWidth)
-	}
-	if m.createField == createFieldRoot {
-		rootLine = renderStyledPaneLine(selectedLineStyle, rootLine, contentWidth)
-	}
 	if m.createField == createFieldTemplate {
 		templateLine = renderStyledPaneLine(selectedLineStyle, templateLine, contentWidth)
 	}
-	if m.createField == createFieldCustomWindows {
-		customLine = renderStyledPaneLine(selectedLineStyle, customLine, contentWidth)
-	}
 
-	rows = append(rows, nameLine)
-	rows = append(rows, rootLine)
+	rows = append(rows, m.createName.View())
+	rows = append(rows, m.createRoot.View())
 	rows = append(rows, templateLine)
 	if m.isCustomTemplateSelected() {
-		rows = append(rows, customLine)
+		rows = append(rows, m.createCustom.View())
 	}
 	rows = append(rows, "")
 	rows = append(rows, "Enter moves field; Enter on last field creates env + tmux")
@@ -2139,48 +2193,49 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.createMode = false
 		m.createField = createFieldName
-		m.createName = ""
-		m.createRoot = ""
+		m.createName.SetValue("")
+		m.createRoot.SetValue("")
 		m.createTemplate = m.defaultTemplateIndex()
-		m.createCustom = ""
+		m.createCustom.SetValue("")
+		m.createName.Blur()
+		m.createRoot.Blur()
+		m.createCustom.Blur()
 		m.status = "Create canceled."
 		return m, nil
 	case "tab", "down":
 		m.shiftCreateField(1)
+		m.focusCreateField()
 		return m, nil
 	case "shift+tab", "up":
 		m.shiftCreateField(-1)
+		m.focusCreateField()
 		return m, nil
 	case "left":
 		if m.createField == createFieldTemplate {
 			m.moveCreateTemplate(-1)
+			return m, nil
 		}
-		return m, nil
 	case "right":
 		if m.createField == createFieldTemplate {
 			m.moveCreateTemplate(1)
+			return m, nil
 		}
-		return m, nil
-	case "backspace", "ctrl+h":
-		m.backspaceCreateField()
-		return m, nil
-	case "ctrl+u":
-		m.clearCreateField()
-		return m, nil
 	case "enter":
 		if !m.isCreateLastField() {
 			m.shiftCreateField(1)
+			m.focusCreateField()
 			return m, nil
 		}
-
-		name := strings.TrimSpace(m.createName)
-		root := strings.TrimSpace(m.createRoot)
+		name := strings.TrimSpace(m.createName.Value())
+		root := strings.TrimSpace(m.createRoot.Value())
 		if name == "" || root == "" {
 			if name == "" {
 				m.createField = createFieldName
+				m.focusCreateField()
 				m.status = "Name is required."
 			} else {
 				m.createField = createFieldRoot
+				m.focusCreateField()
 				m.status = "Root path is required."
 			}
 			return m, nil
@@ -2190,65 +2245,31 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Template error: " + err.Error()
 			if m.isCustomTemplateSelected() {
 				m.createField = createFieldCustomWindows
+				m.focusCreateField()
 			}
 			return m, nil
 		}
-
 		m.status = "Creating environment and tmux session..."
 		return m, createEnvironmentCmd(name, root, windows)
 	}
 
-	if len(msg.Runes) > 0 && !msg.Alt {
-		m.appendCreateField(string(msg.Runes))
+	// Delegate to the focused textinput
+	var cmd tea.Cmd
+	switch m.createField {
+	case createFieldName:
+		m.createName, cmd = m.createName.Update(msg)
+	case createFieldRoot:
+		m.createRoot, cmd = m.createRoot.Update(msg)
+	case createFieldCustomWindows:
+		m.createCustom, cmd = m.createCustom.Update(msg)
 	}
-	return m, nil
+	return m, cmd
 }
 
-func (m *Model) appendCreateField(s string) {
-	if m.createField == createFieldName {
-		m.createName += s
-		return
-	}
-	if m.createField == createFieldRoot {
-		m.createRoot += s
-		return
-	}
-	if m.createField == createFieldCustomWindows {
-		m.createCustom += s
-	}
-}
-
-func (m *Model) backspaceCreateField() {
-	if m.createField == createFieldName {
-		m.createName = trimLastRune(m.createName)
-		return
-	}
-	if m.createField == createFieldRoot {
-		m.createRoot = trimLastRune(m.createRoot)
-		return
-	}
-	if m.createField == createFieldCustomWindows {
-		m.createCustom = trimLastRune(m.createCustom)
-	}
-}
-
-func (m *Model) clearCreateField() {
-	if m.createField == createFieldName {
-		m.createName = ""
-		return
-	}
-	if m.createField == createFieldRoot {
-		m.createRoot = ""
-		return
-	}
-	if m.createField == createFieldCustomWindows {
-		m.createCustom = ""
-	}
-}
 
 func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
 	if m.isCustomTemplateSelected() {
-		return parseWindowSpec(m.createCustom)
+		return parseWindowSpec(m.createCustom.Value())
 	}
 	if m.createTemplate < 0 || m.createTemplate >= len(m.templates) {
 		return nil, fmt.Errorf("selected template is invalid")
@@ -2260,26 +2281,18 @@ func (m Model) renderTemplatePane(width, height int) string {
 	rows := make([]string, 0, 14)
 	contentWidth := paneContentWidth(width)
 
-	name := m.templateName
-	if name == "" {
-		name = "<template-name>"
+	inputW := func(prompt string) int {
+		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
+		if w < 1 {
+			w = 1
+		}
+		return w
 	}
-	spec := m.templateSpec
-	if spec == "" {
-		spec = "<editor=nvim .;terminal;lazygit=lazygit>"
-	}
+	m.templateName.Width = inputW(m.templateName.Prompt)
+	m.templateSpec.Width = inputW(m.templateSpec.Prompt)
 
-	nameLine := "Name: " + name
-	specLine := "Windows: " + spec
-	if m.templateField == templateFieldName {
-		nameLine = renderStyledPaneLine(selectedLineStyle, nameLine, contentWidth)
-	}
-	if m.templateField == templateFieldWindows {
-		specLine = renderStyledPaneLine(selectedLineStyle, specLine, contentWidth)
-	}
-
-	rows = append(rows, nameLine)
-	rows = append(rows, specLine)
+	rows = append(rows, m.templateName.View())
+	rows = append(rows, m.templateSpec.View())
 	rows = append(rows, "")
 	rows = append(rows, "Window spec format: name=cmd;name2;name3=cmd|cwd")
 	rows = append(rows, "Enter on last field saves template")
@@ -2289,21 +2302,23 @@ func (m Model) renderTemplatePane(width, height int) string {
 	if m.templateEditing {
 		modeName = "Edit Template"
 	}
-	borderTitle := modeName
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), true)
+	return renderPaneWithBorderTitle(width, height, modeName, strings.Join(rows, "\n"), true)
 }
 
 func (m Model) renderThemePickerPane(width, height int) string {
 	indices := m.filteredThemeIndices()
-	query := m.themeQuery
 	contentWidth := paneContentWidth(width)
-	if query == "" {
-		query = "<type to filter themes>"
+
+	promptW := lipgloss.Width(m.themeQuery.Prompt)
+	inputW := contentWidth - promptW - 1 // -1 for cursor space in View()
+	if inputW < 1 {
+		inputW = 1
 	}
+	m.themeQuery.Width = inputW
 
 	rows := []string{
 		fmt.Sprintf("Current: %s", m.currentThemeName()),
-		"Search: " + query,
+		m.themeQuery.View(),
 		"",
 	}
 
@@ -2396,8 +2411,10 @@ func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.templateEditing = false
 		m.templateOrigin = ""
 		m.templateField = templateFieldName
-		m.templateName = ""
-		m.templateSpec = ""
+		m.templateName.SetValue("")
+		m.templateSpec.SetValue("")
+		m.templateName.Blur()
+		m.templateSpec.Blur()
 		m.status = "Template mode canceled."
 		return m, nil
 	case "tab", "down", "up", "shift+tab":
@@ -2406,32 +2423,28 @@ func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.templateField = templateFieldName
 		}
-		return m, nil
-	case "backspace", "ctrl+h":
-		m.backspaceTemplateField()
-		return m, nil
-	case "ctrl+u":
-		m.clearTemplateField()
+		m.focusTemplateField()
 		return m, nil
 	case "enter":
 		if m.templateField == templateFieldName {
 			m.templateField = templateFieldWindows
+			m.focusTemplateField()
 			return m, nil
 		}
-
-		name := strings.TrimSpace(m.templateName)
+		name := strings.TrimSpace(m.templateName.Value())
 		if name == "" {
 			m.templateField = templateFieldName
+			m.focusTemplateField()
 			m.status = "Template name is required."
 			return m, nil
 		}
-		windows, err := parseWindowSpec(m.templateSpec)
+		windows, err := parseWindowSpec(m.templateSpec.Value())
 		if err != nil {
 			m.templateField = templateFieldWindows
+			m.focusTemplateField()
 			m.status = "Template windows error: " + err.Error()
 			return m, nil
 		}
-
 		m.status = "Saving template..."
 		origin := ""
 		if m.templateEditing {
@@ -2440,43 +2453,17 @@ func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, saveTemplateCmd(origin, name, windows)
 	}
 
-	if len(msg.Runes) > 0 && !msg.Alt {
-		m.appendTemplateField(string(msg.Runes))
+	// Delegate to the focused textinput
+	var cmd tea.Cmd
+	switch m.templateField {
+	case templateFieldName:
+		m.templateName, cmd = m.templateName.Update(msg)
+	case templateFieldWindows:
+		m.templateSpec, cmd = m.templateSpec.Update(msg)
 	}
-	return m, nil
+	return m, cmd
 }
 
-func (m *Model) appendTemplateField(s string) {
-	if m.templateField == templateFieldName {
-		m.templateName += s
-		return
-	}
-	m.templateSpec += s
-}
-
-func (m *Model) backspaceTemplateField() {
-	if m.templateField == templateFieldName {
-		m.templateName = trimLastRune(m.templateName)
-		return
-	}
-	m.templateSpec = trimLastRune(m.templateSpec)
-}
-
-func (m *Model) clearTemplateField() {
-	if m.templateField == templateFieldName {
-		m.templateName = ""
-		return
-	}
-	m.templateSpec = ""
-}
-
-func trimLastRune(input string) string {
-	runes := []rune(input)
-	if len(runes) == 0 {
-		return input
-	}
-	return string(runes[:len(runes)-1])
-}
 
 func loadConfigCmd() tea.Cmd {
 	return func() tea.Msg {
