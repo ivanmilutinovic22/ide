@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2467,13 +2468,16 @@ func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func loadConfigCmd() tea.Cmd {
 	return func() tea.Msg {
+		log.Printf("loadConfig: reading config")
 		data, err := config.LoadAll()
 		if err != nil {
+			log.Printf("loadConfig: ERROR %v", err)
 			return configLoadedMsg{err: err}
 		}
 		envs := data.Environments
 		templates := data.Templates
 		theme := strings.TrimSpace(data.Theme)
+		log.Printf("loadConfig: loaded %d environments, %d templates, theme=%q", len(envs), len(templates), theme)
 		sort.Slice(envs, func(i, j int) bool {
 			return strings.ToLower(envs[i].Name) < strings.ToLower(envs[j].Name)
 		})
@@ -2494,16 +2498,21 @@ func loadConfigCmd() tea.Cmd {
 
 func loadSessionsCmd() tea.Cmd {
 	return func() tea.Msg {
+		log.Printf("loadSessions: listing tmux sessions")
 		names, err := tmux.ListSessions()
 		if err != nil {
+			log.Printf("loadSessions: ERROR listing sessions: %v", err)
 			return sessionsLoadedMsg{err: err}
 		}
+		log.Printf("loadSessions: found %d sessions: %v", len(names), names)
 		windows := map[string][]string{}
 		for _, name := range names {
 			ws, winErr := tmux.ListWindows(name)
 			if winErr != nil {
+				log.Printf("loadSessions: ERROR listing windows for %q: %v", name, winErr)
 				return sessionsLoadedMsg{err: winErr}
 			}
+			log.Printf("loadSessions: session %q has windows: %v", name, ws)
 			windows[name] = ws
 		}
 		return sessionsLoadedMsg{names: names, windows: windows}
@@ -2525,6 +2534,7 @@ func createEnvironmentCmd(name, root string, windows []config.WindowTemplate) te
 	return func() tea.Msg {
 		name = strings.TrimSpace(name)
 		root = normalizeRootPath(root)
+		log.Printf("createEnvironment: name=%q root=%q windows=%d", name, root, len(windows))
 		if name == "" {
 			return environmentCreatedMsg{err: fmt.Errorf("name is required")}
 		}
@@ -2534,15 +2544,21 @@ func createEnvironmentCmd(name, root string, windows []config.WindowTemplate) te
 
 		data, err := config.LoadAll()
 		if err != nil {
+			log.Printf("createEnvironment: ERROR loading config: %v", err)
 			return environmentCreatedMsg{err: err}
 		}
 		for _, env := range data.Environments {
 			if strings.EqualFold(strings.TrimSpace(env.Name), name) {
+				log.Printf("createEnvironment: environment %q already exists", name)
 				return environmentCreatedMsg{err: fmt.Errorf("environment %q already exists", name)}
 			}
 		}
 		if len(windows) == 0 {
 			windows = config.DefaultWindows()
+			log.Printf("createEnvironment: no windows provided, using defaults (%d windows)", len(windows))
+		}
+		for i, w := range windows {
+			log.Printf("createEnvironment: window[%d] name=%q cmd=%q cwd=%q", i, w.Name, w.Cmd, w.Cwd)
 		}
 
 		newEnv := config.Environment{
@@ -2552,12 +2568,18 @@ func createEnvironmentCmd(name, root string, windows []config.WindowTemplate) te
 		}
 		data.Environments = append(data.Environments, newEnv)
 		if err := config.SaveAll(data); err != nil {
+			log.Printf("createEnvironment: ERROR saving config: %v", err)
 			return environmentCreatedMsg{err: err}
 		}
 
 		sessionErr := tmux.CheckTmuxExists()
 		if sessionErr == nil {
 			sessionErr = tmux.EnsureSession(newEnv)
+		}
+		if sessionErr != nil {
+			log.Printf("createEnvironment: ERROR ensuring session: %v", sessionErr)
+		} else {
+			log.Printf("createEnvironment: session ready for %q", name)
 		}
 
 		return environmentCreatedMsg{env: newEnv, sessionErr: sessionErr}
@@ -2568,6 +2590,10 @@ func saveTemplateCmd(originalName, name string, windows []config.WindowTemplate)
 	return func() tea.Msg {
 		originalName = strings.TrimSpace(originalName)
 		name = strings.TrimSpace(name)
+		log.Printf("saveTemplate: originalName=%q name=%q windows=%d", originalName, name, len(windows))
+		for i, w := range windows {
+			log.Printf("saveTemplate: window[%d] name=%q cmd=%q cwd=%q", i, w.Name, w.Cmd, w.Cwd)
+		}
 		if name == "" {
 			return templateSavedMsg{err: fmt.Errorf("template name is required")}
 		}
@@ -2620,10 +2646,17 @@ func saveTemplateCmd(originalName, name string, windows []config.WindowTemplate)
 
 func killSessionCmd(session string) tea.Cmd {
 	return func() tea.Msg {
+		log.Printf("killSession: session=%q", session)
 		if err := tmux.CheckTmuxExists(); err != nil {
+			log.Printf("killSession: tmux not found: %v", err)
 			return sessionKilledMsg{session: session, err: err}
 		}
 		err := tmux.KillSession(session)
+		if err != nil {
+			log.Printf("killSession: ERROR killing %q: %v", session, err)
+		} else {
+			log.Printf("killSession: killed %q", session)
+		}
 		return sessionKilledMsg{session: session, err: err}
 	}
 }
@@ -2908,25 +2941,33 @@ func normalizeRootPath(value string) string {
 
 func prepareAttachCmd(env config.Environment, windowName string) tea.Cmd {
 	return func() tea.Msg {
+		log.Printf("prepareAttach: env=%q window=%q", env.Name, windowName)
 		if err := tmux.CheckTmuxExists(); err != nil {
+			log.Printf("prepareAttach: tmux not found: %v", err)
 			return attachReadyMsg{err: err}
 		}
 		if err := tmux.EnsureSession(env); err != nil {
+			log.Printf("prepareAttach: ERROR ensuring session for %q: %v", env.Name, err)
 			return attachReadyMsg{err: err}
 		}
 		session := tmux.SessionName(env.Name)
 		target := tmux.AttachTarget(env, windowName)
+		log.Printf("prepareAttach: session=%q target=%q", session, target)
 		if strings.TrimSpace(windowName) != "" {
 			hasWindow, err := tmux.HasWindow(session, windowName)
 			if err != nil {
+				log.Printf("prepareAttach: ERROR checking window %q: %v", windowName, err)
 				return attachReadyMsg{err: err}
 			}
+			log.Printf("prepareAttach: hasWindow(%q)=%v", windowName, hasWindow)
 			if hasWindow {
 				_ = exec.Command("tmux", "select-window", "-t", target).Run()
 			} else {
+				log.Printf("prepareAttach: window %q not found, falling back to session root", windowName)
 				target = session
 			}
 		}
+		log.Printf("prepareAttach: ready, attaching to %q", target)
 		return attachReadyMsg{target: target}
 	}
 }

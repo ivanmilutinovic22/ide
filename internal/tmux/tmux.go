@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,10 +117,14 @@ func HasWindow(session, window string) (bool, error) {
 
 func EnsureSession(env config.Environment) error {
 	session := SessionName(env.Name)
+	log.Printf("EnsureSession: env=%q session=%q windows=%d", env.Name, session, len(env.Windows))
+
 	if HasSession(session) {
+		log.Printf("EnsureSession: session %q already exists, skipping", session)
 		return nil
 	}
 	if len(env.Windows) == 0 {
+		log.Printf("EnsureSession: no windows defined, falling back to default shell window")
 		env.Windows = []config.WindowTemplate{{Name: "shell"}}
 	}
 
@@ -134,11 +139,14 @@ func EnsureSession(env config.Environment) error {
 	if firstCommand := startupCommand(first.Cmd); firstCommand != "" {
 		args = append(args, firstCommand)
 	}
+	log.Printf("EnsureSession: creating session with first window %q cwd=%q cmd=%q args=%v", firstName, firstCwd, first.Cmd, args)
 	if err := exec.Command("tmux", args...).Run(); err != nil {
+		log.Printf("EnsureSession: ERROR creating session %q: %v", session, err)
 		return fmt.Errorf("create tmux session %q: %w", session, err)
 	}
+	log.Printf("EnsureSession: session %q created", session)
 
-	for _, w := range env.Windows[1:] {
+	for i, w := range env.Windows[1:] {
 		name := safeWindowName(w.Name)
 		cwd := resolveCwd(env.Root, w.Cwd)
 		args = []string{"new-window", "-t", session, "-n", name}
@@ -148,11 +156,15 @@ func EnsureSession(env config.Environment) error {
 		if command := startupCommand(w.Cmd); command != "" {
 			args = append(args, command)
 		}
+		log.Printf("EnsureSession: creating window[%d] %q cwd=%q cmd=%q args=%v", i+1, name, cwd, w.Cmd, args)
 		if err := exec.Command("tmux", args...).Run(); err != nil {
+			log.Printf("EnsureSession: ERROR creating window %q: %v", name, err)
 			return fmt.Errorf("create window %q: %w", name, err)
 		}
+		log.Printf("EnsureSession: window %q created", name)
 	}
 
+	log.Printf("EnsureSession: done, session %q has %d windows", session, len(env.Windows))
 	return nil
 }
 
