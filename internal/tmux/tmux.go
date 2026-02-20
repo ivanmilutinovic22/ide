@@ -214,11 +214,11 @@ func startupCommand(command string) string {
 	if strings.TrimSpace(command) == "" {
 		return ""
 	}
-	script := strings.TrimSpace(command) + `; exec "${SHELL:-/bin/sh}" -i`
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
 	}
+	script := strings.TrimSpace(command) + "; exec " + shell + " -i"
 	return shell + " -lc " + shellQuote(script)
 }
 
