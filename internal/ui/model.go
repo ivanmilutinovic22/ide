@@ -63,14 +63,14 @@ var (
 			Foreground(lipgloss.Color("252")).
 			Background(lipgloss.Color("236")).
 			ColorWhitespace(true)
-	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	statusStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
 	windowBoxStyle = lipgloss.NewStyle().
 			Background(lipgloss.Color("236")).
 			Foreground(lipgloss.Color("244"))
 	selectedWindowBoxStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("220")).
-			Bold(true)
+				Background(lipgloss.Color("236")).
+				Foreground(lipgloss.Color("220")).
+				Bold(true)
 )
 
 const (
@@ -996,7 +996,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.moveWindow(1)
 		}
-		m.pendingSelect = msg.envName
 		if msg.sessionErr != nil {
 			m.status = "Template order saved, but live tmux reorder failed: " + msg.sessionErr.Error()
 		} else if msg.direction < 0 {
@@ -1671,7 +1670,7 @@ func paneBoxStyle(width, height int, focused bool) lipgloss.Style {
 	if focused {
 		baseStyle = focusedPaneStyle
 	}
-	return baseStyle.Width(width - 2).Height(height).Padding(0, 1)
+	return baseStyle.Width(width-2).Height(height).Padding(0, 1)
 }
 
 func splitPaneWidths(total int) (int, int) {
@@ -1744,7 +1743,6 @@ func paneContentWidth(width int) int {
 	}
 	return contentWidth
 }
-
 
 func padLineToWidth(line string, width int) string {
 	if width <= 0 {
@@ -2145,7 +2143,6 @@ func (m Model) renderDetailsPane(width, height int) string {
 		previewRows = append(previewRows, "")
 	}
 
-
 	allRows := append(topRows, previewRows...)
 	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(allRows, "\n"), focused)
 }
@@ -2266,7 +2263,6 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, cmd
 }
-
 
 func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
 	if m.isCustomTemplateSelected() {
@@ -2464,7 +2460,6 @@ func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	return m, cmd
 }
-
 
 func loadConfigCmd() tea.Cmd {
 	return func() tea.Msg {
