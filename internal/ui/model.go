@@ -601,6 +601,16 @@ func applyThemeStyles(theme uiTheme) {
 		Bold(true)
 }
 
+func applyTextInputTheme(ti *textinput.Model, theme uiTheme) {
+	bg := lipgloss.Color(theme.PaneBG)
+	fg := lipgloss.Color(theme.AppFG)
+	muted := lipgloss.Color(theme.Muted)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(muted).Background(bg)
+	ti.Cursor.TextStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
+}
+
 func (m *Model) applyCurrentTheme() {
 	if len(m.themes) == 0 {
 		m.themes = defaultThemes()
@@ -611,7 +621,14 @@ func (m *Model) applyCurrentTheme() {
 	if m.themeIndex < 0 || m.themeIndex >= len(m.themes) {
 		m.themeIndex = 0
 	}
-	applyThemeStyles(m.currentTheme())
+	theme := m.currentTheme()
+	applyThemeStyles(theme)
+	applyTextInputTheme(&m.createName, theme)
+	applyTextInputTheme(&m.createRoot, theme)
+	applyTextInputTheme(&m.createCustom, theme)
+	applyTextInputTheme(&m.templateName, theme)
+	applyTextInputTheme(&m.templateSpec, theme)
+	applyTextInputTheme(&m.themeQuery, theme)
 }
 
 func (m Model) currentTheme() uiTheme {
@@ -770,12 +787,12 @@ func NewModel() Model {
 		themes:         defaultThemes(),
 		status:         "Loading environments...",
 	}
-	m.createName = newTextInput("Name: ", "<environment-name>")
-	m.createRoot = newTextInput("Root: ", "<path/to/project>")
-	m.createCustom = newTextInput("Windows: ", "<cmd>:<cwd>, ...")
-	m.templateName = newTextInput("Name: ", "<template-name>")
-	m.templateSpec = newTextInput("Windows: ", "<cmd>:<cwd>, ...")
-	m.themeQuery = newTextInput("", "<type to filter themes>")
+	m.createName = newTextInput("Name: ", "")
+	m.createRoot = newTextInput("Root: ", "")
+	m.createCustom = newTextInput("Windows: ", "")
+	m.templateName = newTextInput("Name: ", "")
+	m.templateSpec = newTextInput("Windows: ", "")
+	m.themeQuery = newTextInput("", "")
 	m.applyCurrentTheme()
 	return m
 }
