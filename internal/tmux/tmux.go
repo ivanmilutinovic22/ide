@@ -242,7 +242,7 @@ func CurrentProcess(session, window string) string {
 
 func CapturePane(session, window string) (string, error) {
 	target := session + ":" + safeWindowName(window)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-t", target)
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-t", target)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {

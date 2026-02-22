@@ -6,8 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -150,6 +153,8 @@ type Model struct {
 	previewSession        string
 	previewWindow         string
 	previewProcess        string
+	previewBG             string
+	terminalBG            string
 }
 
 type configLoadedMsg struct {
@@ -221,6 +226,8 @@ type panePreviewMsg struct {
 	content string
 	process string
 }
+
+type previewTickMsg struct{}
 
 func defaultThemes() []uiTheme {
 	return []uiTheme{
@@ -779,13 +786,14 @@ func newTextInput(prompt, placeholder string) textinput.Model {
 	return ti
 }
 
-func NewModel() Model {
+func NewModel(terminalBG string) Model {
 	m := Model{
 		sessions:       map[string]struct{}{},
 		sessionWindows: map[string][]string{},
 		focusPane:      focusPaneEnvironments,
 		themes:         defaultThemes(),
 		status:         "Loading environments...",
+		terminalBG:     terminalBG,
 	}
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")
@@ -798,7 +806,7 @@ func NewModel() Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadConfigCmd(), loadSessionsCmd())
+	return tea.Batch(loadConfigCmd(), loadSessionsCmd(), previewTickCmd())
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -880,7 +888,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedTemplate = idx
 				}
 			case focusPaneWindows:
-				if env, ok := m.currentEnv(); ok && idx < len(env.Windows) {
+				if windows := m.currentWindowNames(); idx < len(windows) {
 					m.selectedWindow = idx
 					return m, m.captureCurrentWindowCmd()
 				}
@@ -970,11 +978,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.captureCurrentWindowCmd()
 
 	case panePreviewMsg:
+		if msg.session != m.previewSession || msg.window != m.previewWindow {
+			m.previewBG = detectPreviewBG(msg.content)
+		}
 		m.previewContent = msg.content
 		m.previewSession = msg.session
 		m.previewWindow = msg.window
 		m.previewProcess = msg.process
 		return m, nil
+
+	case previewTickMsg:
+		return m, tea.Batch(m.captureCurrentWindowCmd(), previewTickCmd())
 
 	case themePersistedMsg:
 		if msg.err != nil {
@@ -2174,6 +2188,19 @@ func (m Model) renderDetailsPane(width, height int) string {
 		m.previewWindow == selectedWindowName &&
 		strings.TrimSpace(m.previewContent) != ""
 
+	// Build styles/sequences for the terminal's own background.
+	// Fallback chain: explicit BG detected in captured content → real terminal
+	// background queried via OSC 11 at startup → theme default.
+	previewBGColor := m.previewBG
+	if previewBGColor == "" {
+		previewBGColor = m.terminalBG
+	}
+	if previewBGColor == "" {
+		previewBGColor = theme.PaneBG
+	}
+	previewBGStyle := lipgloss.NewStyle().Background(lipgloss.Color(previewBGColor))
+	previewBGSeq := colorToANSIBG(previewBGColor)
+
 	if hasPreview && previewHeight > 0 {
 		captureLines := strings.Split(strings.TrimRight(m.previewContent, "\n"), "\n")
 		start := len(captureLines) - previewHeight
@@ -2182,20 +2209,36 @@ func (m Model) renderDetailsPane(width, height int) string {
 		}
 		for _, line := range captureLines[start:] {
 			line = strings.TrimRight(line, " \t")
-			runes := []rune(line)
-			if len(runes) > contentWidth {
-				runes = runes[:contentWidth]
+			lineWidth := ansi.StringWidth(line)
+			if lineWidth > contentWidth {
+				// Center: trim equal amounts from both sides so the middle of
+				// the captured terminal (where content typically lives) is shown.
+				offset := (lineWidth - contentWidth) / 2
+				line = ansi.Cut(line, offset, offset+contentWidth)
+				lineWidth = contentWidth
 			}
-			previewRows = append(previewRows, string(runes))
+			padding := max(0, contentWidth-lineWidth)
+			if strings.Contains(line, "\x1b[") {
+				// ANSI content: inject bg at start and after every reset so
+				// the pane background never bleeds through.
+				line = injectBGIntoLine(line, previewBGSeq)
+				if padding > 0 {
+					line = line + previewBGSeq + strings.Repeat(" ", padding)
+				}
+			} else {
+				// Plain text: render the full line width with terminal bg.
+				line = previewBGStyle.Render(padLineToWidth(line, contentWidth))
+			}
+			previewRows = append(previewRows, line)
 		}
 	} else if !usingLiveWindows && previewHeight > 0 {
 		placeholder := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Inactive)).Render("No active session")
 		previewRows = append(previewRows, placeholder)
 	}
 
-	// Pad preview to exact height.
+	// Pad preview to exact height with terminal background.
 	for len(previewRows) < previewHeight {
-		previewRows = append(previewRows, "")
+		previewRows = append(previewRows, previewBGStyle.Render(strings.Repeat(" ", contentWidth)))
 	}
 
 	allRows := append(topRows, previewRows...)
@@ -3035,6 +3078,121 @@ func capturePaneCmd(session, window string) tea.Cmd {
 		process := tmux.CurrentProcess(session, window)
 		return panePreviewMsg{session: session, window: window, content: content, process: process}
 	}
+}
+
+var sgrRe = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
+
+// colorToANSIBG converts a lipgloss color string to a raw ANSI background
+// escape sequence: "#rrggbb" → truecolor, "N" → 256-color palette.
+func colorToANSIBG(color string) string {
+	if len(color) == 7 && color[0] == '#' {
+		r, _ := strconv.ParseInt(color[1:3], 16, 32)
+		g, _ := strconv.ParseInt(color[3:5], 16, 32)
+		b, _ := strconv.ParseInt(color[5:7], 16, 32)
+		return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	}
+	if color != "" {
+		return fmt.Sprintf("\x1b[48;5;%sm", color)
+	}
+	return ""
+}
+
+// injectBGIntoLine prepends bgSeq to the line and re-injects it after every
+// SGR reset (\e[0m or \e[m) so the terminal bg doesn't bleed through resets.
+func injectBGIntoLine(line, bgSeq string) string {
+	if bgSeq == "" {
+		return line
+	}
+	line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+bgSeq)
+	line = strings.ReplaceAll(line, "\x1b[m", "\x1b[m"+bgSeq)
+	return bgSeq + line
+}
+
+// colorRGB converts a lipgloss color string to R,G,B components (0-255).
+func colorRGB(color string) (int, int, int) {
+	if len(color) == 7 && color[0] == '#' {
+		r, _ := strconv.ParseInt(color[1:3], 16, 32)
+		g, _ := strconv.ParseInt(color[3:5], 16, 32)
+		b, _ := strconv.ParseInt(color[5:7], 16, 32)
+		return int(r), int(g), int(b)
+	}
+	n, err := strconv.Atoi(color)
+	if err != nil || n < 0 || n > 255 {
+		return 128, 128, 128
+	}
+	if n >= 232 { // grayscale ramp
+		v := 8 + 10*(n-232)
+		return v, v, v
+	}
+	if n >= 16 { // 6x6x6 color cube
+		idx := n - 16
+		bi := idx % 6; idx /= 6
+		gi := idx % 6; idx /= 6
+		ri := idx
+		toC := func(i int) int {
+			if i == 0 {
+				return 0
+			}
+			return 55 + 40*i
+		}
+		return toC(ri), toC(gi), toC(bi)
+	}
+	// Standard 16 ANSI colors (approximate)
+	ansi16 := [][3]int{
+		{0, 0, 0}, {128, 0, 0}, {0, 128, 0}, {128, 128, 0},
+		{0, 0, 128}, {128, 0, 128}, {0, 128, 128}, {192, 192, 192},
+		{128, 128, 128}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0},
+		{0, 0, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255},
+	}
+	c := ansi16[n]
+	return c[0], c[1], c[2]
+}
+
+// colorLuminance returns perceptual luminance (0–255) of a lipgloss color string.
+func colorLuminance(color string) float64 {
+	r, g, b := colorRGB(color)
+	return 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
+}
+
+// detectPreviewBG scans ANSI escape sequences in captured terminal content and
+// returns the darkest explicit background color found, as a lipgloss-compatible
+// color string (e.g. "#1e1e2e" or "240"). Terminal base backgrounds are always
+// the darkest color; accent/highlight colors are brighter.
+// Returns "" if no explicit background colors are found.
+func detectPreviewBG(content string) string {
+	darkest, darkestLum := "", float64(256)
+	for _, match := range sgrRe.FindAllStringSubmatch(content, -1) {
+		params := strings.Split(match[1], ";")
+		for i := 0; i < len(params); i++ {
+			if params[i] != "48" {
+				continue
+			}
+			var color string
+			if i+2 < len(params) && params[i+1] == "5" {
+				color = params[i+2]
+				i += 2
+			} else if i+4 < len(params) && params[i+1] == "2" {
+				r, _ := strconv.Atoi(params[i+2])
+				g, _ := strconv.Atoi(params[i+3])
+				b, _ := strconv.Atoi(params[i+4])
+				color = fmt.Sprintf("#%02x%02x%02x", r, g, b)
+				i += 4
+			}
+			if color != "" {
+				if lum := colorLuminance(color); lum < darkestLum {
+					darkestLum = lum
+					darkest = color
+				}
+			}
+		}
+	}
+	return darkest
+}
+
+func previewTickCmd() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return previewTickMsg{}
+	})
 }
 
 func (m Model) captureCurrentWindowCmd() tea.Cmd {

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"ide/internal/terminal"
 	"ide/internal/ui"
 )
 
@@ -23,7 +24,11 @@ func main() {
 		log.SetOutput(io.Discard)
 	}
 
-	p := tea.NewProgram(ui.NewModel(), tea.WithAltScreen())
+	// Query the terminal background color before bubbletea takes over stdin.
+	termBG := terminal.QueryBackgroundColor()
+	log.Printf("terminal background color: %q", termBG)
+
+	p := tea.NewProgram(ui.NewModel(termBG), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Fatal(err)
 	}
