@@ -868,6 +868,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = focusedPaneStatus(pane)
 			return m, m.captureCurrentWindowCmd()
 		}
+		if idx, ok := parseIndexShortcut(key); ok {
+			switch m.focusPane {
+			case focusPaneEnvironments:
+				if idx < len(m.environments) {
+					m.selectedEnv = idx
+					return m, m.captureCurrentWindowCmd()
+				}
+			case focusPaneTemplates:
+				if idx < len(m.templates) {
+					m.selectedTemplate = idx
+				}
+			case focusPaneWindows:
+				if env, ok := m.currentEnv(); ok && idx < len(env.Windows) {
+					m.selectedWindow = idx
+					return m, m.captureCurrentWindowCmd()
+				}
+			}
+			return m, nil
+		}
 		switch key {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -1234,25 +1253,32 @@ func (m *Model) toggleFocusPane() {
 
 func parsePaneShortcut(key string) (int, bool) {
 	switch key {
-	case "1":
+	case "s":
 		return focusPaneEnvironments, true
-	case "2":
+	case "w":
 		return focusPaneWindows, true
-	case "3":
+	case "t":
 		return focusPaneTemplates, true
 	default:
 		return 0, false
 	}
 }
 
+func parseIndexShortcut(key string) (int, bool) {
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		return int(key[0]-'1'), true
+	}
+	return 0, false
+}
+
 func focusedPaneStatus(pane int) string {
 	switch pane {
 	case focusPaneEnvironments:
-		return "Focused [1] Sessions panel"
+		return "Focused [s] Sessions panel"
 	case focusPaneWindows:
-		return "Focused [2] Windows panel"
+		return "Focused [w] Windows panel"
 	case focusPaneTemplates:
-		return "Focused [3] Templates panel"
+		return "Focused [t] Templates panel"
 	default:
 		return "Focused panel"
 	}
@@ -1841,8 +1867,8 @@ func renderStyledPaneLine(style lipgloss.Style, line string, width int) string {
 	return style.Render(padLineToWidth(line, width))
 }
 
-func panelBorderTitle(number int, name string, focused bool) string {
-	title := fmt.Sprintf("[%d]-%s", number, name)
+func panelBorderTitle(shortcut string, name string, focused bool) string {
+	title := fmt.Sprintf("[%s]-%s", shortcut, name)
 	if focused {
 		title += "*"
 	}
@@ -1997,7 +2023,7 @@ func splitLeftPaneHeights(total int) (int, int) {
 func (m Model) renderEnvironmentPane(width, height int) string {
 	rows := make([]string, 0, len(m.environments)+1)
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneEnvironments
-	borderTitle := panelBorderTitle(1, "Sessions", focused)
+	borderTitle := panelBorderTitle("s", "Sessions", focused)
 	contentWidth := paneContentWidth(width)
 
 	if len(m.environments) == 0 {
@@ -2014,7 +2040,11 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		if running {
 			state = "up"
 		}
-		plainLine := fmt.Sprintf("%-23s [%s]", env.Name, state)
+		num := "   "
+		if idx < 9 {
+			num = fmt.Sprintf("[%d]", idx+1)
+		}
+		plainLine := fmt.Sprintf("%s %-20s [%s]", num, env.Name, state)
 		line := "  " + plainLine
 		if idx == m.selectedEnv {
 			line = renderStyledPaneLine(selectedLineStyle, "> "+plainLine, contentWidth)
@@ -2034,7 +2064,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 func (m Model) renderTemplatesPane(width, height int) string {
 	rows := make([]string, 0, len(m.templates)+2)
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneTemplates
-	borderTitle := panelBorderTitle(3, "Templates", focused)
+	borderTitle := panelBorderTitle("t", "Templates", focused)
 	contentWidth := paneContentWidth(width)
 
 	if len(m.templates) == 0 {
@@ -2045,7 +2075,11 @@ func (m Model) renderTemplatesPane(width, height int) string {
 	}
 
 	for idx, tpl := range m.templates {
-		line := fmt.Sprintf("%-18s (%d windows)", tpl.Name, len(tpl.Windows))
+		num := "   "
+		if idx < 9 {
+			num = fmt.Sprintf("[%d]", idx+1)
+		}
+		line := fmt.Sprintf("%s %-15s (%d windows)", num, tpl.Name, len(tpl.Windows))
 		if idx == m.selectedTemplate {
 			line = renderStyledPaneLine(selectedLineStyle, "> "+line, contentWidth)
 		} else {
@@ -2059,7 +2093,7 @@ func (m Model) renderTemplatesPane(width, height int) string {
 
 func (m Model) renderDetailsPane(width, height int) string {
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneWindows
-	borderTitle := panelBorderTitle(2, "Windows", focused)
+	borderTitle := panelBorderTitle("w", "Windows", focused)
 	env, ok := m.currentEnv()
 	if !ok {
 		body := strings.Join([]string{"", "No environment selected."}, "\n")
@@ -2071,10 +2105,14 @@ func (m Model) renderDetailsPane(width, height int) string {
 	windows := m.currentWindowNames()
 	tabs := make([]string, 0, len(windows))
 	for i, w := range windows {
+		label := w
+		if i < 9 {
+			label = fmt.Sprintf("[%d] %s", i+1, w)
+		}
 		if i == m.selectedWindow {
-			tabs = append(tabs, selectedWindowBoxStyle.Render(w))
+			tabs = append(tabs, selectedWindowBoxStyle.Render(label))
 		} else {
-			tabs = append(tabs, windowBoxStyle.Render(w))
+			tabs = append(tabs, windowBoxStyle.Render(label))
 		}
 	}
 	sepStyle := lipgloss.NewStyle().
