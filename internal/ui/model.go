@@ -23,19 +23,20 @@ import (
 
 var (
 	paneStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("242")).
-			BorderBackground(lipgloss.Color("236")).
 			Background(lipgloss.Color("236")).
 			Foreground(lipgloss.Color("252")).
 			ColorWhitespace(true)
 	focusedPaneStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("39")).
-				BorderBackground(lipgloss.Color("236")).
 				Background(lipgloss.Color("236")).
 				Foreground(lipgloss.Color("252")).
 				ColorWhitespace(true)
+	modalPaneStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("39")).
+			BorderBackground(lipgloss.Color("236")).
+			Background(lipgloss.Color("236")).
+			Foreground(lipgloss.Color("252")).
+			ColorWhitespace(true)
 	selectedLineStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("230")).
 				Background(lipgloss.Color("24")).
@@ -554,13 +555,14 @@ func normalizeTheme(theme uiTheme) uiTheme {
 func applyThemeStyles(theme uiTheme) {
 	theme = normalizeTheme(theme)
 	paneStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(theme.Border)).
-		BorderBackground(lipgloss.Color(theme.PaneBG)).
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.AppFG)).
 		ColorWhitespace(true)
 	focusedPaneStyle = lipgloss.NewStyle().
+		Background(lipgloss.Color(theme.PaneBG)).
+		Foreground(lipgloss.Color(theme.AppFG)).
+		ColorWhitespace(true)
+	modalPaneStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(theme.Accent)).
 		BorderBackground(lipgloss.Color(theme.PaneBG)).
@@ -1141,27 +1143,32 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	leftWidth, rightWidth := splitPaneWidths(m.width)
+	leftWidth, rightWidth := splitPaneWidths(m.width - 1) // -1 for horizontal gap
 
-	bodyHeight := m.height - 1
+	bodyHeight := m.height - 2 // -1 status bar, -1 bottom gap
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
-	rightPaneHeight := bodyHeight - 2
+	rightPaneHeight := bodyHeight
 	if rightPaneHeight < 1 {
 		rightPaneHeight = 1
 	}
-	leftContentTotal := bodyHeight - 4
+	leftContentTotal := bodyHeight - 1 // -1 for vertical gap
 	if leftContentTotal < 2 {
 		leftContentTotal = 2
 	}
 
+	theme := m.currentTheme()
+	gapBG := lipgloss.Color(theme.AppBG)
+
 	topHeight, bottomHeight := splitLeftPaneHeights(leftContentTotal)
 	leftTopPane := m.renderEnvironmentPane(leftWidth, topHeight)
 	leftBottomPane := m.renderTemplatesPane(leftWidth, bottomHeight)
-	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftTopPane, leftBottomPane)
+	verticalGap := lipgloss.NewStyle().Width(leftWidth).Background(gapBG).Render("")
+	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftTopPane, verticalGap, leftBottomPane)
 	rightPane := m.renderDetailsPane(rightWidth, rightPaneHeight)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	horizontalGap := lipgloss.NewStyle().Width(1).Height(bodyHeight).Background(gapBG).Render("")
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, horizontalGap, rightPane)
 	if m.createMode || m.templateMode {
 		bodyWidth := lipgloss.Width(body)
 		bodyHeight := lipgloss.Height(body)
@@ -1204,10 +1211,10 @@ func (m Model) View() string {
 		body = overlayCentered(body, popup)
 	}
 	status := statusStyle.Render(fitLineToWidth(m.statusLineText(), m.width))
-	rendered := lipgloss.JoinVertical(lipgloss.Left, body, status)
+	bottomGap := lipgloss.NewStyle().Width(m.width).Background(gapBG).Render("")
+	rendered := lipgloss.JoinVertical(lipgloss.Left, body, bottomGap, status)
 
 	if m.width > 0 && m.height > 0 {
-		theme := m.currentTheme()
 		rendered = lipgloss.Place(
 			m.width,
 			m.height,
@@ -1217,6 +1224,11 @@ func (m Model) View() string {
 			lipgloss.WithWhitespaceBackground(lipgloss.Color(theme.AppBG)),
 			lipgloss.WithWhitespaceForeground(lipgloss.Color(theme.AppFG)),
 		)
+	}
+
+	// Safety: ensure output never exceeds terminal height to prevent scrolling.
+	if m.height > 0 {
+		rendered = truncateLines(rendered, m.height)
 	}
 
 	return rendered
@@ -1727,7 +1739,11 @@ func paneBoxStyle(width, height int, focused bool) lipgloss.Style {
 	if focused {
 		baseStyle = focusedPaneStyle
 	}
-	return baseStyle.Width(width-2).Height(height).Padding(0, 1)
+	return baseStyle.Width(width).Height(height).MaxHeight(height).Padding(0, 1)
+}
+
+func modalBoxStyle(width, height int) lipgloss.Style {
+	return modalPaneStyle.Width(width - modalPaneStyle.GetHorizontalFrameSize()).Height(height).Padding(0, 1)
 }
 
 func splitPaneWidths(total int) (int, int) {
@@ -1794,7 +1810,15 @@ func modalPopupDimensions(bodyWidth, bodyHeight, desiredWidth, desiredHeight int
 }
 
 func paneContentWidth(width int) int {
-	contentWidth := width - paneStyle.GetHorizontalFrameSize() - 2 // -2 for Padding(0,1) added in paneBoxStyle
+	contentWidth := width - 2 // -2 for Padding(0,1) in paneBoxStyle; no border frame
+	if contentWidth < 0 {
+		return 0
+	}
+	return contentWidth
+}
+
+func modalContentWidth(width int) int {
+	contentWidth := width - modalPaneStyle.GetHorizontalFrameSize() - 2 // border frame + padding
 	if contentWidth < 0 {
 		return 0
 	}
@@ -1878,22 +1902,71 @@ func (m Model) contextShortcutHints() string {
 }
 
 func renderStyledPaneLine(style lipgloss.Style, line string, width int) string {
-	return style.Render(padLineToWidth(line, width))
+	return style.Render(fitLineToWidth(line, width))
 }
 
-func panelBorderTitle(shortcut string, name string, focused bool) string {
-	title := fmt.Sprintf("[%s]-%s", shortcut, name)
+func panelTitle(shortcut string, name string, focused bool, theme uiTheme) string {
+	color := theme.Muted
 	if focused {
-		title += "*"
+		color = theme.Accent
 	}
-	return title
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Bold(focused)
+	return style.Render(fmt.Sprintf("[%s] %s", shortcut, name))
 }
 
-func renderPaneWithBorderTitle(width, height int, borderTitle string, body string, focused bool) string {
+func viewportSlice(rows []string, selected, maxVisible int) []string {
+	if len(rows) <= maxVisible {
+		return rows
+	}
+	start := 0
+	if selected > maxVisible-1 {
+		start = selected - maxVisible + 1
+	}
+	end := start + maxVisible
+	if end > len(rows) {
+		end = len(rows)
+		start = end - maxVisible
+	}
+	if start < 0 {
+		start = 0
+	}
+	return rows[start:end]
+}
+
+func truncateLines(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n")
+}
+
+func renderPaneWithTitle(width, height int, title string, body string, focused bool) string {
+	contentHeight := height - 1 // title takes 1 row
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
 	body = applyPaneTextBackground(body, paneContentWidth(width))
-	paneStyleForPane := paneBoxStyle(width, height, focused)
-	pane := paneStyleForPane.Render(body)
-	return injectBorderTitle(pane, borderTitle, paneStyleForPane)
+	body = truncateLines(body, contentHeight)
+	pane := paneBoxStyle(width, contentHeight, focused).Render(body)
+	titleStyle := lipgloss.NewStyle().
+		Background(paneStyle.GetBackground()).
+		Width(width).
+		Padding(0, 1)
+	titleLine := titleStyle.Render(title)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, pane)
+}
+
+func renderModalWithBorderTitle(width, height int, borderTitle string, body string) string {
+	body = applyPaneTextBackground(body, modalContentWidth(width))
+	style := modalBoxStyle(width, height)
+	pane := style.Render(body)
+	return injectBorderTitle(pane, borderTitle, style)
 }
 
 func applyPaneTextBackground(body string, width int) string {
@@ -1903,6 +1976,9 @@ func applyPaneTextBackground(body string, width int) string {
 	lines := strings.Split(body, "\n")
 	for i := range lines {
 		if strings.Contains(lines[i], "\x1b[") {
+			if ansi.StringWidth(lines[i]) > width {
+				lines[i] = ansi.Cut(lines[i], 0, width)
+			}
 			lines[i] = lines[i] + paneTextStyle.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(lines[i]))))
 			continue
 		}
@@ -2037,14 +2113,15 @@ func splitLeftPaneHeights(total int) (int, int) {
 func (m Model) renderEnvironmentPane(width, height int) string {
 	rows := make([]string, 0, len(m.environments)+1)
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneEnvironments
-	borderTitle := panelBorderTitle("s", "Sessions", focused)
+	theme := m.currentTheme()
+	title := panelTitle("s", "Sessions", focused, theme)
 	contentWidth := paneContentWidth(width)
 
 	if len(m.environments) == 0 {
 		rows = append(rows, "")
 		rows = append(rows, "No environments configured.")
 		rows = append(rows, "Press a to create one or edit ~/.config/ide/environments.json")
-		return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+		return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
 	}
 
 	for idx, env := range m.environments {
@@ -2072,20 +2149,23 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		rows = append(rows, line)
 	}
 
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+	visibleHeight := height - 1 // title takes 1 row
+	rows = viewportSlice(rows, m.selectedEnv, visibleHeight)
+	return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
 }
 
 func (m Model) renderTemplatesPane(width, height int) string {
 	rows := make([]string, 0, len(m.templates)+2)
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneTemplates
-	borderTitle := panelBorderTitle("t", "Templates", focused)
+	theme := m.currentTheme()
+	title := panelTitle("t", "Templates", focused, theme)
 	contentWidth := paneContentWidth(width)
 
 	if len(m.templates) == 0 {
 		rows = append(rows, "")
 		rows = append(rows, "No templates saved.")
 		rows = append(rows, "Press a in this panel to add one.")
-		return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+		return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
 	}
 
 	for idx, tpl := range m.templates {
@@ -2102,16 +2182,19 @@ func (m Model) renderTemplatesPane(width, height int) string {
 		rows = append(rows, line)
 	}
 
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), focused)
+	visibleHeight := height - 1 // title takes 1 row
+	rows = viewportSlice(rows, m.selectedTemplate, visibleHeight)
+	return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
 }
 
 func (m Model) renderDetailsPane(width, height int) string {
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneWindows
-	borderTitle := panelBorderTitle("w", "Windows", focused)
+	theme := m.currentTheme()
+	title := panelTitle("w", "Windows", focused, theme)
 	env, ok := m.currentEnv()
 	if !ok {
 		body := strings.Join([]string{"", "No environment selected."}, "\n")
-		return renderPaneWithBorderTitle(width, height, borderTitle, body, focused)
+		return renderPaneWithTitle(width, height, title, body, focused)
 	}
 
 	contentWidth := paneContentWidth(width)
@@ -2130,9 +2213,12 @@ func (m Model) renderDetailsPane(width, height int) string {
 		}
 	}
 	sepStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(m.currentTheme().PaneBG)).
-		Foreground(lipgloss.Color(m.currentTheme().Muted))
+		Background(lipgloss.Color(theme.PaneBG)).
+		Foreground(lipgloss.Color(theme.Muted))
 	tabsLine := strings.Join(tabs, sepStyle.Render(" - "))
+	if ansi.StringWidth(tabsLine) > contentWidth {
+		tabsLine = ansi.Cut(tabsLine, 0, contentWidth)
+	}
 
 	selectedWindowName := ""
 	selectedWindowCmd := ""
@@ -2152,7 +2238,6 @@ func (m Model) renderDetailsPane(width, height int) string {
 		}
 	}
 
-	theme := m.currentTheme()
 	infoLineStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Muted)).
 		Background(lipgloss.Color(theme.SelectedBG)).
@@ -2176,8 +2261,8 @@ func (m Model) renderDetailsPane(width, height int) string {
 	topVisualHeight := len(topRows)
 
 	// Preview fills the remaining space below the top section.
-	contentHeight := height - 2 // subtract top + bottom borders
-	previewHeight := contentHeight - topVisualHeight
+	contentHeight := height - 1 // subtract title line
+	previewHeight := contentHeight - topVisualHeight - 1 // -1 for bottom pane margin
 	if previewHeight < 0 {
 		previewHeight = 0
 	}
@@ -2211,10 +2296,7 @@ func (m Model) renderDetailsPane(width, height int) string {
 			line = strings.TrimRight(line, " \t")
 			lineWidth := ansi.StringWidth(line)
 			if lineWidth > contentWidth {
-				// Center: trim equal amounts from both sides so the middle of
-				// the captured terminal (where content typically lives) is shown.
-				offset := (lineWidth - contentWidth) / 2
-				line = ansi.Cut(line, offset, offset+contentWidth)
+				line = ansi.Cut(line, 0, contentWidth)
 				lineWidth = contentWidth
 			}
 			padding := max(0, contentWidth-lineWidth)
@@ -2242,12 +2324,12 @@ func (m Model) renderDetailsPane(width, height int) string {
 	}
 
 	allRows := append(topRows, previewRows...)
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(allRows, "\n"), focused)
+	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), focused)
 }
 
 func (m Model) renderCreatePane(width, height int) string {
 	rows := make([]string, 0, 20)
-	contentWidth := paneContentWidth(width)
+	contentWidth := modalContentWidth(width)
 
 	inputW := func(prompt string) int {
 		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
@@ -2279,7 +2361,7 @@ func (m Model) renderCreatePane(width, height int) string {
 	rows = append(rows, "Esc cancels")
 
 	borderTitle := "Create Environment"
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), true)
+	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
 }
 
 func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -2374,7 +2456,7 @@ func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
 
 func (m Model) renderTemplatePane(width, height int) string {
 	rows := make([]string, 0, 14)
-	contentWidth := paneContentWidth(width)
+	contentWidth := modalContentWidth(width)
 
 	inputW := func(prompt string) int {
 		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
@@ -2397,12 +2479,12 @@ func (m Model) renderTemplatePane(width, height int) string {
 	if m.templateEditing {
 		modeName = "Edit Template"
 	}
-	return renderPaneWithBorderTitle(width, height, modeName, strings.Join(rows, "\n"), true)
+	return renderModalWithBorderTitle(width, height, modeName, strings.Join(rows, "\n"))
 }
 
 func (m Model) renderThemePickerPane(width, height int) string {
 	indices := m.filteredThemeIndices()
-	contentWidth := paneContentWidth(width)
+	contentWidth := modalContentWidth(width)
 
 	promptW := lipgloss.Width(m.themeQuery.Prompt)
 	inputW := contentWidth - promptW - 1 // -1 for cursor space in View()
@@ -2439,7 +2521,7 @@ func (m Model) renderThemePickerPane(width, height int) string {
 	rows = append(rows, "Type to filter, Enter to apply, Esc to close")
 
 	borderTitle := "[ctrl+t]-Themes"
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), true)
+	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
 }
 
 func (m Model) renderShortcutsPane(width, height int) string {
@@ -2494,7 +2576,7 @@ func (m Model) renderShortcutsPane(width, height int) string {
 	}
 
 	borderTitle := "[?]-Shortcuts"
-	return renderPaneWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"), true)
+	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
 }
 
 func (m Model) updateTemplateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
