@@ -95,6 +95,33 @@ const (
 	templateFieldWindows
 )
 
+// AgentStatus represents the detected status of an AI agent
+type AgentStatus string
+
+const (
+	AgentStatusIdle          AgentStatus = "idle"
+	AgentStatusCooking       AgentStatus = "cooking"
+	AgentStatusAwaitingInput AgentStatus = "awaiting_input"
+)
+
+// ProcessInfo tracks process metrics for agent status detection
+type ProcessInfo struct {
+	PID       int
+	CPU       float64
+	State     string // R, S, D, T, etc.
+	Timestamp time.Time
+}
+
+// WindowProcessInfo holds process info for a specific window
+type WindowProcessInfo struct {
+	Current          ProcessInfo
+	Previous         ProcessInfo
+	Status           AgentStatus
+	LowActivityCount int     // Consecutive samples with low activity
+	BaselineCPU      float64 // Average CPU when idle (awaiting_input)
+	SampleCount      int     // Number of samples taken for baseline
+}
+
 type uiTheme struct {
 	Name       string
 	AppBG      string
@@ -156,6 +183,7 @@ type Model struct {
 	previewProcess        string
 	previewBG             string
 	terminalBG            string
+	windowProcessInfo     map[string]WindowProcessInfo // key: session:window
 }
 
 type configLoadedMsg struct {
@@ -229,6 +257,13 @@ type panePreviewMsg struct {
 }
 
 type previewTickMsg struct{}
+
+// agentStatusUpdateMsg carries process info updates for agent status detection
+type agentStatusUpdateMsg struct {
+	session  string
+	window   string
+	procInfo ProcessInfo
+}
 
 func defaultThemes() []uiTheme {
 	return []uiTheme{
@@ -790,12 +825,13 @@ func newTextInput(prompt, placeholder string) textinput.Model {
 
 func NewModel(terminalBG string) Model {
 	m := Model{
-		sessions:       map[string]struct{}{},
-		sessionWindows: map[string][]string{},
-		focusPane:      focusPaneEnvironments,
-		themes:         defaultThemes(),
-		status:         "Loading environments...",
-		terminalBG:     terminalBG,
+		sessions:          map[string]struct{}{},
+		sessionWindows:    map[string][]string{},
+		windowProcessInfo: map[string]WindowProcessInfo{},
+		focusPane:         focusPaneEnvironments,
+		themes:            defaultThemes(),
+		status:            "Loading environments...",
+		terminalBG:        terminalBG,
 	}
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")
@@ -987,6 +1023,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewSession = msg.session
 		m.previewWindow = msg.window
 		m.previewProcess = msg.process
+		return m, nil
+
+	case agentStatusUpdateMsg:
+		log.Printf("[Update] Received agentStatusUpdateMsg for session=%s window=%s", msg.session, msg.window)
+		// Update the window process info based on the message
+		m.updateWindowProcessInfoFromMsg(msg.session, msg.window, msg.procInfo)
 		return m, nil
 
 	case previewTickMsg:
@@ -1292,7 +1334,7 @@ func parsePaneShortcut(key string) (int, bool) {
 
 func parseIndexShortcut(key string) (int, bool) {
 	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-		return int(key[0]-'1'), true
+		return int(key[0] - '1'), true
 	}
 	return 0, false
 }
@@ -1743,7 +1785,7 @@ func paneBoxStyle(width, height int, focused bool) lipgloss.Style {
 }
 
 func modalBoxStyle(width, height int) lipgloss.Style {
-	return modalPaneStyle.Width(width - modalPaneStyle.GetHorizontalFrameSize()).Height(height).Padding(0, 1)
+	return modalPaneStyle.Width(width-modalPaneStyle.GetHorizontalFrameSize()).Height(height).Padding(0, 1)
 }
 
 func splitPaneWidths(total int) (int, int) {
@@ -2200,16 +2242,42 @@ func (m Model) renderDetailsPane(width, height int) string {
 	contentWidth := paneContentWidth(width)
 
 	windows := m.currentWindowNames()
+	session := tmux.SessionName(env.Name)
 	tabs := make([]string, 0, len(windows))
 	for i, w := range windows {
-		label := w
+		// Get agent status for this window
+		status := m.getWindowAgentStatus(session, w)
+
+		// Format label with status suffix
+		label := m.formatWindowLabel(w, status)
 		if i < 9 {
-			label = fmt.Sprintf("[%d] %s", i+1, w)
+			label = fmt.Sprintf("[%d] %s", i+1, label)
 		}
+
+		// Choose style based on status and selection
 		if i == m.selectedWindow {
-			tabs = append(tabs, selectedWindowBoxStyle.Render(label))
+			// Selected window - use status color if active, otherwise accent
+			if status != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(status)
+				statusStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.PaneBG)).
+					Bold(true)
+				tabs = append(tabs, statusStyle.Render(label))
+			} else {
+				tabs = append(tabs, selectedWindowBoxStyle.Render(label))
+			}
 		} else {
-			tabs = append(tabs, windowBoxStyle.Render(label))
+			// Unselected window - use status color if active
+			if status != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(status)
+				statusStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.PaneBG))
+				tabs = append(tabs, statusStyle.Render(label))
+			} else {
+				tabs = append(tabs, windowBoxStyle.Render(label))
+			}
 		}
 	}
 	sepStyle := lipgloss.NewStyle().
@@ -2227,7 +2295,6 @@ func (m Model) renderDetailsPane(width, height int) string {
 	if len(windows) > 0 && m.selectedWindow < len(windows) {
 		selectedWindowName = windows[m.selectedWindow]
 	}
-	session := tmux.SessionName(env.Name)
 	if sw, ok := m.sessionWindows[session]; ok && len(sw) > 0 {
 		usingLiveWindows = true
 	}
@@ -2261,7 +2328,7 @@ func (m Model) renderDetailsPane(width, height int) string {
 	topVisualHeight := len(topRows)
 
 	// Preview fills the remaining space below the top section.
-	contentHeight := height - 1 // subtract title line
+	contentHeight := height - 1                          // subtract title line
 	previewHeight := contentHeight - topVisualHeight - 1 // -1 for bottom pane margin
 	if previewHeight < 0 {
 		previewHeight = 0
@@ -3042,6 +3109,9 @@ func parseWindowEntry(entry string) (config.WindowTemplate, error) {
 		return config.WindowTemplate{}, fmt.Errorf("empty window entry")
 	}
 
+	// Extract tags first (format: [tag1][tag2])
+	tags := extractTags(&entry)
+
 	if strings.Contains(entry, "=") {
 		parts := strings.SplitN(entry, "=", 2)
 		name := strings.TrimSpace(parts[0])
@@ -3056,7 +3126,7 @@ func parseWindowEntry(entry string) (config.WindowTemplate, error) {
 			cmd = strings.TrimSpace(cmdCwd[0])
 			cwd = strings.TrimSpace(cmdCwd[1])
 		}
-		return config.WindowTemplate{Name: name, Cmd: cmd, Cwd: cwd}, nil
+		return config.WindowTemplate{Name: name, Cmd: cmd, Cwd: cwd, Tags: tags}, nil
 	}
 
 	if strings.Contains(entry, "|") {
@@ -3076,14 +3146,41 @@ func parseWindowEntry(entry string) (config.WindowTemplate, error) {
 		if len(parts) == 3 {
 			cwd = strings.TrimSpace(parts[2])
 		}
-		return config.WindowTemplate{Name: name, Cmd: cmd, Cwd: cwd}, nil
+		return config.WindowTemplate{Name: name, Cmd: cmd, Cwd: cwd, Tags: tags}, nil
 	}
 
 	name := strings.TrimSpace(entry)
 	if name == "" {
 		return config.WindowTemplate{}, fmt.Errorf("window name cannot be empty")
 	}
-	return config.WindowTemplate{Name: name}, nil
+	return config.WindowTemplate{Name: name, Tags: tags}, nil
+}
+
+// extractTags extracts tags in format [tag1][tag2] from the entry
+// Modifies entry to remove the tags and returns the list of tags
+func extractTags(entry *string) []string {
+	var tags []string
+	re := regexp.MustCompile(`\[(\w+)\]`)
+	matches := re.FindAllStringSubmatch(*entry, -1)
+	for _, match := range matches {
+		if len(match) > 1 {
+			tags = append(tags, match[1])
+		}
+	}
+	// Remove tags from entry
+	*entry = re.ReplaceAllString(*entry, "")
+	*entry = strings.TrimSpace(*entry)
+	return tags
+}
+
+// HasTag checks if a window template has a specific tag
+func HasTag(w config.WindowTemplate, tag string) bool {
+	for _, t := range w.Tags {
+		if strings.EqualFold(t, tag) {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneWindowTemplates(windows []config.WindowTemplate) []config.WindowTemplate {
@@ -3208,8 +3305,10 @@ func colorRGB(color string) (int, int, int) {
 	}
 	if n >= 16 { // 6x6x6 color cube
 		idx := n - 16
-		bi := idx % 6; idx /= 6
-		gi := idx % 6; idx /= 6
+		bi := idx % 6
+		idx /= 6
+		gi := idx % 6
+		idx /= 6
 		ri := idx
 		toC := func(i int) int {
 			if i == 0 {
@@ -3271,6 +3370,296 @@ func detectPreviewBG(content string) string {
 	return darkest
 }
 
+// Agent status detection functions
+
+// detectAgentStatus determines the agent status with hysteresis and adaptive baseline:
+// - Uses baseline CPU (average when idle) to detect significant increases
+// - Cooking: State == "R" OR CPU > baseline + 15% OR CPU > baseline * 1.5
+// - Awaiting: State != "R" AND CPU <= baseline + 10%
+// - Baseline is continuously updated when in awaiting_input state
+func detectAgentStatus(current ProcessInfo, currentStatus AgentStatus, lowActivityCount int, baselineCPU float64, sampleCount int) (AgentStatus, int, float64, int) {
+	// Calculate thresholds using ORIGINAL baseline (before any updates)
+	// This prevents high CPU readings from corrupting the baseline before cooking detection
+	effectiveBaseline := baselineCPU
+	if effectiveBaseline < 1.0 {
+		effectiveBaseline = 1.0
+	}
+
+	// Cooking threshold: CPU must be significantly above baseline
+	// Use +5% absolute or 1.3x multiplier, whichever gives lower threshold
+	cookingThreshold := effectiveBaseline + 5.0
+	if effectiveBaseline*1.3 > cookingThreshold {
+		cookingThreshold = effectiveBaseline * 1.3
+	}
+
+	// High activity detection:
+	// Primary: CPU exceeds threshold (indicates real work)
+	// Agents like opencode use 10-18% CPU when actually working vs 4-5% when idle
+	// Threshold of baseline + 5% reliably catches this (9% when baseline is 4%)
+	cpuElevated := current.CPU > cookingThreshold
+	isHighActivity := cpuElevated
+	// To exit cooking state, we need CPU to drop below threshold
+	// This creates natural hysteresis without a dead zone
+	isLowActivity := current.CPU <= cookingThreshold
+
+	log.Printf("[AGENT-DEBUG] detectAgentStatus: CPU=%.1f, State=%s, baseline=%.1f, threshold=%.1f, currentStatus=%s, sampleCount=%d",
+		current.CPU, current.State, baselineCPU, cookingThreshold, currentStatus, sampleCount)
+
+	switch currentStatus {
+	case AgentStatusCooking:
+		if isHighActivity {
+			log.Printf("[AGENT-DEBUG] Still cooking (high activity)")
+			return AgentStatusCooking, 0, baselineCPU, sampleCount
+		}
+		if isLowActivity {
+			newCount := lowActivityCount + 1
+			log.Printf("[AGENT-DEBUG] Low activity detected, count=%d/3", newCount)
+			if newCount >= 3 {
+				log.Printf("[AGENT-DEBUG] Switching to awaiting_input")
+				return AgentStatusAwaitingInput, 0, baselineCPU, sampleCount
+			}
+			return AgentStatusCooking, newCount, baselineCPU, sampleCount
+		}
+		return AgentStatusCooking, lowActivityCount, baselineCPU, sampleCount
+
+	case AgentStatusAwaitingInput, AgentStatusIdle:
+		if isHighActivity {
+			// Switch to cooking immediately, do NOT update baseline with high CPU reading
+			return AgentStatusCooking, 0, baselineCPU, sampleCount
+		}
+		// Stay awaiting_input and update baseline with this (low) CPU reading
+		newBaseline := baselineCPU
+		newSampleCount := sampleCount
+		if sampleCount == 0 {
+			newBaseline = current.CPU
+			newSampleCount = 1
+		} else if sampleCount < 20 {
+			// Build up initial baseline (first 20 samples)
+			newBaseline = (baselineCPU*float64(sampleCount) + current.CPU) / float64(sampleCount+1)
+			newSampleCount = sampleCount + 1
+		} else {
+			// Rolling average with more weight on recent samples
+			newBaseline = baselineCPU*0.9 + current.CPU*0.1
+			newSampleCount = sampleCount
+		}
+		return AgentStatusAwaitingInput, 0, newBaseline, newSampleCount
+
+	default:
+		// For new windows, start with awaiting_input and build baseline
+		// Don't immediately assume cooking on first high reading
+		// Collect samples first to establish proper baseline
+		log.Printf("[AGENT-DEBUG] New window, sampleCount=%d", sampleCount)
+		if sampleCount < 10 {
+			// First 10 samples: just collect baseline, stay in awaiting
+			newBaseline := current.CPU
+			newSampleCount := sampleCount + 1
+			if sampleCount > 0 {
+				newBaseline = (baselineCPU*float64(sampleCount) + current.CPU) / float64(sampleCount+1)
+			}
+			log.Printf("[AGENT-DEBUG] Initializing sample %d, baseline=%.1f", newSampleCount, newBaseline)
+			return AgentStatusAwaitingInput, 0, newBaseline, newSampleCount
+		}
+
+		// After 10 samples, use normal logic
+		if isHighActivity {
+			log.Printf("[AGENT-DEBUG] High activity detected after init, switching to cooking")
+			return AgentStatusCooking, 0, baselineCPU, sampleCount
+		}
+		return AgentStatusAwaitingInput, 0, current.CPU, 1
+	}
+}
+
+// windowKey creates a unique key for a window
+func windowKey(session, window string) string {
+	return session + ":" + window
+}
+
+// getWindowAgentStatus returns the current agent status for a window
+// Only returns non-idle status if window has [ai] tag
+func (m Model) getWindowAgentStatus(session, window string) AgentStatus {
+	log.Printf("[getWindowAgentStatus] session=%s window=%s", session, window)
+
+	env, ok := m.currentEnv()
+	if !ok {
+		log.Printf("[getWindowAgentStatus] No current environment, returning idle")
+		return AgentStatusIdle
+	}
+
+	// Find the window template to check for [ai] tag
+	windowIdx := -1
+	windows := m.currentWindowNames()
+	log.Printf("[getWindowAgentStatus] env=%s windows=%v", env.Name, windows)
+	for i, w := range windows {
+		if w == window {
+			windowIdx = i
+			break
+		}
+	}
+
+	if windowIdx < 0 || windowIdx >= len(env.Windows) {
+		log.Printf("[getWindowAgentStatus] Window %s not found in config (idx=%d, len=%d), returning idle", window, windowIdx, len(env.Windows))
+		return AgentStatusIdle
+	}
+
+	// Check if window has [ai] tag
+	winTemplate := env.Windows[windowIdx]
+	hasAITag := HasTag(winTemplate, "ai")
+	log.Printf("[getWindowAgentStatus] Found window %s, tags=%v, has_ai=%v", window, winTemplate.Tags, hasAITag)
+	if !hasAITag {
+		return AgentStatusIdle
+	}
+
+	// Return tracked status
+	key := windowKey(session, window)
+	if info, ok := m.windowProcessInfo[key]; ok {
+		log.Printf("[getWindowAgentStatus] Returning tracked status: %s for key=%s", info.Status, key)
+		return info.Status
+	}
+	log.Printf("[getWindowAgentStatus] No tracking info for key=%s, returning idle", key)
+	return AgentStatusIdle
+}
+
+// getWindowStatusColor returns the color for a given agent status
+func (m Model) getWindowStatusColor(status AgentStatus) string {
+	theme := m.currentTheme()
+	switch status {
+	case AgentStatusCooking:
+		return "#fbbf24" // Amber/yellow for cooking
+	case AgentStatusAwaitingInput:
+		return "#22d3ee" // Cyan for awaiting input
+	default:
+		return theme.Muted
+	}
+}
+
+// updateWindowProcessInfo updates the process info and status for a window
+func (m *Model) updateWindowProcessInfo(session, window string) {
+	log.Printf("[updateWindowProcessInfo] Starting check for session=%s window=%s", session, window)
+	env, ok := m.currentEnv()
+	if !ok {
+		return
+	}
+
+	// Find the window template to check for [ai] tag
+	windowIdx := -1
+	windows := m.currentWindowNames()
+	for i, w := range windows {
+		if w == window {
+			windowIdx = i
+			break
+		}
+	}
+
+	if windowIdx < 0 || windowIdx >= len(env.Windows) {
+		return
+	}
+
+	// Only track if window has [ai] tag
+	winTemplate := env.Windows[windowIdx]
+	if !HasTag(winTemplate, "ai") {
+		return
+	}
+
+	// Get current process info from tmux
+	procInfo, err := tmux.GetPaneProcessInfo(session, window)
+	if err != nil {
+		return
+	}
+
+	log.Printf("[updateWindowProcessInfo] Got procInfo: PID=%d CPU=%.2f State=%s", procInfo.PID, procInfo.CPU, procInfo.State)
+
+	key := windowKey(session, window)
+	current := ProcessInfo{
+		PID:       procInfo.PID,
+		CPU:       procInfo.CPU,
+		State:     procInfo.State,
+		Timestamp: time.Now(),
+	}
+
+	// Get previous info and current tracking state
+	var previous ProcessInfo
+	var currentStatus AgentStatus
+	var lowActivityCount int
+	var baselineCPU float64
+	var sampleCount int
+	if existing, ok := m.windowProcessInfo[key]; ok {
+		previous = existing.Current
+		currentStatus = existing.Status
+		lowActivityCount = existing.LowActivityCount
+		baselineCPU = existing.BaselineCPU
+		sampleCount = existing.SampleCount
+	}
+
+	log.Printf("[updateWindowProcessInfo] Current tracking state: status=%s baselineCPU=%.2f sampleCount=%d", currentStatus, baselineCPU, sampleCount)
+
+	// Detect status with hysteresis and adaptive baseline
+	status, newLowActivityCount, newBaselineCPU, newSampleCount := detectAgentStatus(
+		current, currentStatus, lowActivityCount, baselineCPU, sampleCount,
+	)
+
+	log.Printf("[updateWindowProcessInfo] Detected new status: %s", status)
+
+	// Update tracking
+	m.windowProcessInfo[key] = WindowProcessInfo{
+		Current:          current,
+		Previous:         previous,
+		Status:           status,
+		LowActivityCount: newLowActivityCount,
+		BaselineCPU:      newBaselineCPU,
+		SampleCount:      newSampleCount,
+	}
+}
+
+// updateWindowProcessInfoFromMsg updates the process info from an agentStatusUpdateMsg
+// This should be called from the Update method when receiving agentStatusUpdateMsg
+func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo ProcessInfo) {
+	log.Printf("[updateWindowProcessInfoFromMsg] Processing msg for session=%s window=%s", session, window)
+
+	key := windowKey(session, window)
+
+	// Get previous info and current tracking state
+	var previous ProcessInfo
+	var currentStatus AgentStatus
+	var lowActivityCount int
+	var baselineCPU float64
+	var sampleCount int
+	if existing, ok := m.windowProcessInfo[key]; ok {
+		previous = existing.Current
+		currentStatus = existing.Status
+		lowActivityCount = existing.LowActivityCount
+		baselineCPU = existing.BaselineCPU
+		sampleCount = existing.SampleCount
+	}
+
+	log.Printf("[updateWindowProcessInfoFromMsg] Current tracking: status=%s baseline=%.2f samples=%d",
+		currentStatus, baselineCPU, sampleCount)
+
+	// Detect status with hysteresis and adaptive baseline
+	status, newLowActivityCount, newBaselineCPU, newSampleCount := detectAgentStatus(
+		procInfo, currentStatus, lowActivityCount, baselineCPU, sampleCount,
+	)
+
+	log.Printf("[updateWindowProcessInfoFromMsg] New status: %s baseline=%.2f", status, newBaselineCPU)
+
+	// Update tracking
+	m.windowProcessInfo[key] = WindowProcessInfo{
+		Current:          procInfo,
+		Previous:         previous,
+		Status:           status,
+		LowActivityCount: newLowActivityCount,
+		BaselineCPU:      newBaselineCPU,
+		SampleCount:      newSampleCount,
+	}
+}
+
+// formatWindowLabel formats a window name with its status suffix
+func (m Model) formatWindowLabel(name string, status AgentStatus) string {
+	if status == AgentStatusIdle {
+		return name
+	}
+	return name + "-" + string(status)
+}
+
 func previewTickCmd() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 		return previewTickMsg{}
@@ -3290,5 +3679,45 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 	if len(windows) == 0 || m.selectedWindow >= len(windows) {
 		return nil
 	}
-	return capturePaneCmd(session, windows[m.selectedWindow])
+
+	// Create commands to check agent status for all windows with [ai] tag
+	var cmds []tea.Cmd
+	for _, w := range windows {
+		// Check if this window has [ai] tag
+		windowIdx := -1
+		for i, win := range windows {
+			if win == w {
+				windowIdx = i
+				break
+			}
+		}
+		if windowIdx >= 0 && windowIdx < len(env.Windows) && HasTag(env.Windows[windowIdx], "ai") {
+			cmds = append(cmds, checkAgentStatusCmd(session, w))
+		}
+	}
+
+	// Also capture the pane preview
+	cmds = append(cmds, capturePaneCmd(session, windows[m.selectedWindow]))
+
+	return tea.Batch(cmds...)
+}
+
+// checkAgentStatusCmd creates a command to check agent status for a window
+func checkAgentStatusCmd(session, window string) tea.Cmd {
+	return func() tea.Msg {
+		procInfo, err := tmux.GetPaneProcessInfo(session, window)
+		if err != nil {
+			return nil
+		}
+		return agentStatusUpdateMsg{
+			session: session,
+			window:  window,
+			procInfo: ProcessInfo{
+				PID:       procInfo.PID,
+				CPU:       procInfo.CPU,
+				State:     procInfo.State,
+				Timestamp: time.Now(),
+			},
+		}
+	}
 }

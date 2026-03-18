@@ -10,9 +10,10 @@ import (
 )
 
 type WindowTemplate struct {
-	Name string `json:"name"`
-	Cmd  string `json:"cmd,omitempty"`
-	Cwd  string `json:"cwd,omitempty"`
+	Name string   `json:"name"`
+	Cmd  string   `json:"cmd,omitempty"`
+	Cwd  string   `json:"cwd,omitempty"`
+	Tags []string `json:"tags,omitempty"`
 }
 
 type Template struct {

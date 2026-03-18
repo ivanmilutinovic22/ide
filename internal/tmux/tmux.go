@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"ide/internal/config"
@@ -257,4 +258,106 @@ func CheckTmuxExists() error {
 		return errors.New("tmux is not installed or not in PATH")
 	}
 	return nil
+}
+
+// ProcessInfo contains process metrics for a pane
+type ProcessInfo struct {
+	PID   int
+	CPU   float64
+	State string
+}
+
+// GetPaneProcessInfo retrieves the current process info for a pane
+func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
+	target := session + ":" + safeWindowName(window)
+
+	// Get PID
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		log.Printf("[TMUX-DEBUG] Failed to get pane PID: %v", err)
+		return ProcessInfo{}, err
+	}
+	pidStr := strings.TrimSpace(out.String())
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		log.Printf("[TMUX-DEBUG] Failed to parse PID %s: %v", pidStr, err)
+		return ProcessInfo{}, err
+	}
+	log.Printf("[TMUX-DEBUG] Session=%s Window=%s Pane PID=%d", session, window, pid)
+
+	// Get foreground process (the actual running process, not the shell)
+	fgPID := getForegroundProcess(pid)
+	log.Printf("[TMUX-DEBUG] Foreground process PID=%d (shell PID=%d)", fgPID, pid)
+
+	// Get CPU and state for the foreground process
+	cpu, state := getProcessMetrics(fgPID)
+	log.Printf("[TMUX-DEBUG] Process metrics: CPU=%.2f State=%s", cpu, state)
+
+	return ProcessInfo{
+		PID:   fgPID,
+		CPU:   cpu,
+		State: state,
+	}, nil
+}
+
+// getForegroundProcess gets the foreground process of a process group
+func getForegroundProcess(pid int) int {
+	// Try to get the foreground process of the terminal
+	// In Linux, we can check /proc/[pid]/task/[tid]/children
+	// Or use pgrep to find children
+	cmd := exec.Command("pgrep", "-P", strconv.Itoa(pid))
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		log.Printf("[TMUX-DEBUG] pgrep failed for PID %d: %v, using shell PID", pid, err)
+		return pid // Fallback to the shell PID
+	}
+
+	children := strings.Split(strings.TrimSpace(out.String()), "\n")
+	log.Printf("[TMUX-DEBUG] PID %d children: %v", pid, children)
+	if len(children) == 0 || children[0] == "" {
+		log.Printf("[TMUX-DEBUG] No children found for PID %d, using shell PID", pid)
+		return pid
+	}
+
+	// Return the first child (foreground process)
+	if childPID, err := strconv.Atoi(children[0]); err == nil {
+		// Get process name for logging
+		nameCmd := exec.Command("ps", "-p", strconv.Itoa(childPID), "-o", "comm=", "--no-headers")
+		var nameOut bytes.Buffer
+		nameCmd.Stdout = &nameOut
+		if nameErr := nameCmd.Run(); nameErr == nil {
+			log.Printf("[TMUX-DEBUG] Using foreground process: PID=%d Name=%s", childPID, strings.TrimSpace(nameOut.String()))
+		}
+		return childPID
+	}
+	log.Printf("[TMUX-DEBUG] Failed to parse child PID %s", children[0])
+	return pid
+}
+
+// getProcessMetrics retrieves CPU percentage and state for a process
+func getProcessMetrics(pid int) (float64, string) {
+	// Get CPU percentage using ps
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "%cpu,stat", "--no-headers")
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
+		return 0, ""
+	}
+
+	line := strings.TrimSpace(out.String())
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return 0, ""
+	}
+
+	cpu, _ := strconv.ParseFloat(parts[0], 64)
+	state := parts[1]
+	if len(state) > 0 {
+		state = string(state[0]) // Just the first character (R, S, D, etc.)
+	}
+
+	return cpu, state
 }
