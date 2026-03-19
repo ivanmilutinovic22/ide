@@ -267,11 +267,13 @@ type ProcessInfo struct {
 	State string
 }
 
-// GetPaneProcessInfo retrieves the current process info for a pane
+// GetPaneProcessInfo retrieves the current process info for a pane.
+// It sums CPU usage across all descendant processes of the pane's shell,
+// giving an accurate picture of total activity in the pane.
 func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
 	target := session + ":" + safeWindowName(window)
 
-	// Get PID
+	// Get pane PID (this is the shell process)
 	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -280,76 +282,92 @@ func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
 		return ProcessInfo{}, err
 	}
 	pidStr := strings.TrimSpace(out.String())
-	pid, err := strconv.Atoi(pidStr)
+	shellPID, err := strconv.Atoi(pidStr)
 	if err != nil {
 		log.Printf("[TMUX-DEBUG] Failed to parse PID %s: %v", pidStr, err)
 		return ProcessInfo{}, err
 	}
-	log.Printf("[TMUX-DEBUG] Session=%s Window=%s Pane PID=%d", session, window, pid)
 
-	// Get foreground process (the actual running process, not the shell)
-	fgPID := getForegroundProcess(pid)
-	log.Printf("[TMUX-DEBUG] Foreground process PID=%d (shell PID=%d)", fgPID, pid)
+	// Sum CPU of ALL descendants (shell -> agent -> agent's subprocesses)
+	// This captures total pane activity regardless of process tree shape
+	totalCPU := sumDescendantCPU(shellPID)
+	hasRunning := hasRunningDescendant(shellPID)
 
-	// Get CPU and state for the foreground process
-	cpu, state := getProcessMetrics(fgPID)
-	log.Printf("[TMUX-DEBUG] Process metrics: CPU=%.2f State=%s", cpu, state)
+	state := "S"
+	if hasRunning {
+		state = "R"
+	}
+
+	log.Printf("[TMUX-DEBUG] Session=%s Window=%s ShellPID=%d totalCPU=%.2f state=%s",
+		session, window, shellPID, totalCPU, state)
 
 	return ProcessInfo{
-		PID:   fgPID,
-		CPU:   cpu,
+		PID:   shellPID,
+		CPU:   totalCPU,
 		State: state,
 	}, nil
 }
 
-// getForegroundProcess gets the foreground process of a process group
-func getForegroundProcess(pid int) int {
-	// Try to get the foreground process of the terminal
-	// In Linux, we can check /proc/[pid]/task/[tid]/children
-	// Or use pgrep to find children
+// getChildPIDs returns the direct child PIDs of a process
+func getChildPIDs(pid int) []int {
 	cmd := exec.Command("pgrep", "-P", strconv.Itoa(pid))
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		log.Printf("[TMUX-DEBUG] pgrep failed for PID %d: %v, using shell PID", pid, err)
-		return pid // Fallback to the shell PID
+		return nil
 	}
-
-	children := strings.Split(strings.TrimSpace(out.String()), "\n")
-	log.Printf("[TMUX-DEBUG] PID %d children: %v", pid, children)
-	if len(children) == 0 || children[0] == "" {
-		log.Printf("[TMUX-DEBUG] No children found for PID %d, using shell PID", pid)
-		return pid
-	}
-
-	// Return the first child (foreground process)
-	if childPID, err := strconv.Atoi(children[0]); err == nil {
-		// Get process name for logging
-		nameCmd := exec.Command("ps", "-p", strconv.Itoa(childPID), "-o", "comm=", "--no-headers")
-		var nameOut bytes.Buffer
-		nameCmd.Stdout = &nameOut
-		if nameErr := nameCmd.Run(); nameErr == nil {
-			log.Printf("[TMUX-DEBUG] Using foreground process: PID=%d Name=%s", childPID, strings.TrimSpace(nameOut.String()))
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	var pids []int
+	for _, line := range lines {
+		if p, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			pids = append(pids, p)
 		}
-		return childPID
 	}
-	log.Printf("[TMUX-DEBUG] Failed to parse child PID %s", children[0])
-	return pid
+	return pids
+}
+
+// sumDescendantCPU recursively sums CPU usage of all descendants of a process
+func sumDescendantCPU(pid int) float64 {
+	children := getChildPIDs(pid)
+	var total float64
+	for _, child := range children {
+		cpu, _ := getProcessMetrics(child)
+		total += cpu + sumDescendantCPU(child)
+	}
+	return total
+}
+
+// hasRunningDescendant checks if any descendant process is in Running state
+func hasRunningDescendant(pid int) bool {
+	children := getChildPIDs(pid)
+	for _, child := range children {
+		_, state := getProcessMetrics(child)
+		if state == "R" {
+			return true
+		}
+		if hasRunningDescendant(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // getProcessMetrics retrieves CPU percentage and state for a process
 func getProcessMetrics(pid int) (float64, string) {
-	// Get CPU percentage using ps
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "%cpu,stat", "--no-headers")
+	// Get CPU percentage and state using ps
+	// Use "=" suffix on format specifiers to suppress headers (works on macOS and Linux)
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "%cpu=", "-o", "state=")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
+		log.Printf("[TMUX-DEBUG] getProcessMetrics: ps failed for PID %d: %v", pid, err)
 		return 0, ""
 	}
 
 	line := strings.TrimSpace(out.String())
 	parts := strings.Fields(line)
 	if len(parts) < 2 {
+		log.Printf("[TMUX-DEBUG] getProcessMetrics: unexpected ps output for PID %d: %q", pid, line)
 		return 0, ""
 	}
 
