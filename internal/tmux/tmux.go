@@ -165,8 +165,20 @@ func EnsureSession(env config.Environment) error {
 		log.Printf("EnsureSession: window %q created", name)
 	}
 
+	// Bind prefix+a to open the search popup
+	if exe, err := os.Executable(); err == nil {
+		BindSearchKey(exe)
+	}
+
 	log.Printf("EnsureSession: done, session %q has %d windows", session, len(env.Windows))
 	return nil
+}
+
+// BindSearchKey sets up a tmux keybinding (prefix + a) that opens the IDE
+// search popup directly inside the tmux session using display-popup.
+func BindSearchKey(ideBinary string) {
+	_ = exec.Command("tmux", "bind-key", "-T", "prefix", "a",
+		"display-popup", "-E", "-w", "80%", "-h", "80%", ideBinary, "--search").Run()
 }
 
 func AttachTarget(env config.Environment, windowName string) string {

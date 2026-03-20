@@ -122,6 +122,19 @@ type WindowProcessInfo struct {
 	SampleCount      int     // Number of samples taken for baseline
 }
 
+// fuzzySearchItem represents a single item in the fuzzy search results.
+// IsHeader=true marks a session group header (not selectable).
+type fuzzySearchItem struct {
+	EnvIndex    int
+	WindowIndex int // -1 for headers
+	EnvName     string
+	WindowName  string
+	Status      AgentStatus // for windows: window status; for headers: session-level status
+	Tags        []string
+	Running     bool
+	IsHeader    bool
+}
+
 type uiTheme struct {
 	Name       string
 	AppBG      string
@@ -166,6 +179,7 @@ type Model struct {
 	templateEditing       bool
 	templateOrigin        string
 	showShortcuts         bool
+	shortcutCursor        int
 	showThemePicker       bool
 	themeQuery            textinput.Model
 	themePickerCursor     int
@@ -184,6 +198,10 @@ type Model struct {
 	previewBG             string
 	terminalBG            string
 	windowProcessInfo     map[string]WindowProcessInfo // key: session:window
+	showFuzzySearch       bool
+	fuzzySearchQuery      textinput.Model
+	fuzzySearchCursor     int
+	fuzzySearchResults    []fuzzySearchItem
 }
 
 type configLoadedMsg struct {
@@ -635,7 +653,7 @@ func applyThemeStyles(theme uiTheme) {
 		Foreground(lipgloss.Color(theme.AppFG)).
 		Background(lipgloss.Color(theme.PaneBG)).
 		ColorWhitespace(true)
-	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Status)).Background(lipgloss.Color(theme.AppBG)).ColorWhitespace(true)
+	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Status)).Background(lipgloss.Color(theme.PaneBG))
 	windowBoxStyle = lipgloss.NewStyle().
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.Muted))
@@ -673,6 +691,7 @@ func (m *Model) applyCurrentTheme() {
 	applyTextInputTheme(&m.templateName, theme)
 	applyTextInputTheme(&m.templateSpec, theme)
 	applyTextInputTheme(&m.themeQuery, theme)
+	applyTextInputTheme(&m.fuzzySearchQuery, theme)
 }
 
 func (m Model) currentTheme() uiTheme {
@@ -839,6 +858,7 @@ func NewModel(terminalBG string) Model {
 	m.templateName = newTextInput("Name: ", "")
 	m.templateSpec = newTextInput("Windows: ", "")
 	m.themeQuery = newTextInput("", "")
+	m.fuzzySearchQuery = newTextInput("/ ", "Search sessions and windows...")
 	m.applyCurrentTheme()
 	return m
 }
@@ -867,10 +887,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Theme picker open. Type to filter, Enter to apply."
 			return m, cmd
 		}
+		if key == "/" || key == "ctrl+p" {
+			if m.showFuzzySearch {
+				m.showFuzzySearch = false
+				m.fuzzySearchQuery.Blur()
+				m.status = "Search closed."
+				return m, nil
+			}
+			cmd := m.openFuzzySearch()
+			m.status = "Search open. Type to filter, Enter to attach."
+			return m, cmd
+		}
 		if key == "?" {
 			m.showThemePicker = false
 			m.showShortcuts = !m.showShortcuts
 			if m.showShortcuts {
+				// Start cursor on first non-header item
+				m.shortcutCursor = 0
+				items := shortcutsList()
+				for i, item := range items {
+					if !item.isHeader {
+						m.shortcutCursor = i
+						break
+					}
+				}
 				m.status = "Shortcuts open. Press ? or Esc to close."
 			} else {
 				m.status = "Shortcuts closed."
@@ -878,21 +918,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.showFuzzySearch {
+			return m.updateFuzzySearchMode(msg)
+		}
+
 		if m.showThemePicker {
 			return m.updateThemePickerMode(msg)
 		}
 
 		if m.showShortcuts {
-			switch key {
-			case "esc":
-				m.showShortcuts = false
-				m.status = "Shortcuts closed."
-				return m, nil
-			case "q", "ctrl+c":
-				return m, tea.Quit
-			default:
-				return m, nil
-			}
+			return m.updateShortcutsMode(msg)
 		}
 
 		if m.createMode {
@@ -943,6 +978,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			m.status = "Refreshing..."
 			return m, tea.Batch(loadConfigCmd(), loadSessionsCmd())
+		case "n":
+			m.jumpToNextCookingSession(1)
+			return m, m.captureCurrentWindowCmd()
+		case "N":
+			m.jumpToNextCookingSession(-1)
+			return m, m.captureCurrentWindowCmd()
 		}
 
 		if m.focusPane == focusPaneEnvironments {
@@ -1012,6 +1053,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for session, windows := range msg.windows {
 			m.sessionWindows[session] = windows
 		}
+		// Ensure search keybinding is set for tmux popup
+		go func() {
+			if exe, err := os.Executable(); err == nil {
+				tmux.BindSearchKey(exe)
+			}
+		}()
 		m.normalizeSelection()
 		return m, m.captureCurrentWindowCmd()
 
@@ -1153,8 +1200,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Route unhandled messages (e.g. cursor blink ticks) to the focused textinput.
-	if m.createMode || m.templateMode || m.showThemePicker {
+	if m.createMode || m.templateMode || m.showThemePicker || m.showFuzzySearch {
 		var cmd tea.Cmd
+		if m.showFuzzySearch {
+			m.fuzzySearchQuery, cmd = m.fuzzySearchQuery.Update(msg)
+			return m, cmd
+		}
 		if m.createMode {
 			switch m.createField {
 			case createFieldName:
@@ -1252,7 +1303,33 @@ func (m Model) View() string {
 		}
 		body = overlayCentered(body, popup)
 	}
-	status := statusStyle.Render(fitLineToWidth(m.statusLineText(), m.width))
+	if m.showFuzzySearch {
+		bw := lipgloss.Width(body)
+		bh := lipgloss.Height(body)
+		popupWidth := bw - 6
+		if popupWidth > 100 {
+			popupWidth = 100
+		}
+		if popupWidth < 44 {
+			popupWidth = bw - 2
+		}
+		if popupWidth < 20 {
+			popupWidth = 20
+		}
+		popupHeight := bh - 2
+		if popupHeight > 42 {
+			popupHeight = 42
+		}
+		if popupHeight < 10 {
+			popupHeight = bh
+		}
+		popup := m.renderFuzzySearchPane(popupWidth, popupHeight)
+		body = overlayCentered(body, popup)
+	}
+	statusText := fitLineToWidth(m.statusLineText(), m.width)
+	statusBgSeq := bgANSISeq(statusStyle.GetBackground())
+	statusText = statusBgSeq + strings.ReplaceAll(statusText, "\x1b[0m", "\x1b[0m"+statusBgSeq) + "\x1b[0m"
+	status := statusStyle.Width(m.width).Render(statusText)
 	bottomGap := lipgloss.NewStyle().Width(m.width).Background(gapBG).Render("")
 	rendered := lipgloss.JoinVertical(lipgloss.Left, body, bottomGap, status)
 
@@ -1916,31 +1993,80 @@ func suppressStatusMessage(msg string) bool {
 	return false
 }
 
+// shortcutHint renders a single "key description" pair with the key bold and description muted.
+func (m Model) shortcutHint(key, desc string) string {
+	theme := m.currentTheme()
+	k := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true).
+		Render(key)
+	d := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Muted)).
+		Render(" " + desc)
+	return k + d
+}
+
 func (m Model) contextShortcutHints() string {
+	sep := "   "
+
+	if m.showFuzzySearch {
+		return strings.Join([]string{
+			m.shortcutHint("↑↓", "navigate"),
+			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("esc", "close"),
+		}, sep)
+	}
 	if m.showThemePicker {
-		return "Themes: type filter | j/k move | enter apply | esc close"
+		return strings.Join([]string{
+			m.shortcutHint("↑↓", "navigate"),
+			m.shortcutHint("enter", "apply"),
+			m.shortcutHint("esc", "close"),
+		}, sep)
 	}
 	if m.showShortcuts {
-		return "Shortcuts: ?/esc close | q quit"
+		return strings.Join([]string{
+			m.shortcutHint("?", "close"),
+			m.shortcutHint("esc", "close"),
+		}, sep)
 	}
-	if m.createMode {
-		return "Create env: tab/up/down field | left/right template | enter next/create | esc cancel"
-	}
-	if m.templateMode {
-		return "Template mode: tab/up/down field | enter next/save | esc cancel"
+	if m.createMode || m.templateMode {
+		return strings.Join([]string{
+			m.shortcutHint("tab", "next field"),
+			m.shortcutHint("enter", "confirm"),
+			m.shortcutHint("esc", "cancel"),
+		}, sep)
 	}
 
-	global := "tab or 1/2/3 focus | ctrl+t themes | ? shortcuts | r refresh | q quit"
+	// Context-specific hints first, then global
+	var hints []string
 	switch m.focusPane {
 	case focusPaneEnvironments:
-		return "[1] Sessions: j/k select | enter attach | a create | d delete | x kill | " + global
+		hints = append(hints,
+			m.shortcutHint("j/k", "select"),
+			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("a", "create"),
+		)
 	case focusPaneWindows:
-		return "[2] Windows: h/l or j/k select | enter attach | H/L reorder | " + global
+		hints = append(hints,
+			m.shortcutHint("h/l", "select"),
+			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("H/L", "reorder"),
+		)
 	case focusPaneTemplates:
-		return "[3] Templates: j/k select | a create | e/enter edit | d delete | " + global
-	default:
-		return global
+		hints = append(hints,
+			m.shortcutHint("j/k", "select"),
+			m.shortcutHint("a", "create"),
+			m.shortcutHint("e", "edit"),
+		)
 	}
+	hints = append(hints,
+		m.shortcutHint("tab", "panels"),
+		m.shortcutHint("ctrl+p", "search"),
+		m.shortcutHint("n", "next ai"),
+		m.shortcutHint("ctrl+t", "themes"),
+		m.shortcutHint("?", "help"),
+	)
+	return strings.Join(hints, sep)
 }
 
 func renderStyledPaneLine(style lipgloss.Style, line string, width int) string {
@@ -2011,20 +2137,37 @@ func renderModalWithBorderTitle(width, height int, borderTitle string, body stri
 	return injectBorderTitle(pane, borderTitle, style)
 }
 
+// bgANSISeq extracts the raw ANSI escape sequence that sets a background color.
+func bgANSISeq(c lipgloss.TerminalColor) string {
+	rendered := lipgloss.NewStyle().Background(c).Render("X")
+	if i := strings.Index(rendered, "X"); i > 0 {
+		return rendered[:i]
+	}
+	return ""
+}
+
 func applyPaneTextBackground(body string, width int) string {
 	if body == "" {
 		return body
 	}
 	lines := strings.Split(body, "\n")
+	bg := paneTextStyle.GetBackground()
+	bgSeq := bgANSISeq(bg)
 	for i := range lines {
-		if strings.Contains(lines[i], "\x1b[") {
-			if ansi.StringWidth(lines[i]) > width {
-				lines[i] = ansi.Cut(lines[i], 0, width)
-			}
-			lines[i] = lines[i] + paneTextStyle.Render(strings.Repeat(" ", max(0, width-ansi.StringWidth(lines[i]))))
-			continue
+		if ansi.StringWidth(lines[i]) > width {
+			lines[i] = ansi.Cut(lines[i], 0, width)
 		}
-		lines[i] = paneTextStyle.Render(padLineToWidth(lines[i], width))
+		if strings.Contains(lines[i], "\x1b[") {
+			// Line has ANSI styling — pad with spaces, then replace inner
+			// resets with reset+re-apply-bg so the background persists
+			pad := width - ansi.StringWidth(lines[i])
+			if pad > 0 {
+				lines[i] = lines[i] + strings.Repeat(" ", pad)
+			}
+			lines[i] = bgSeq + strings.ReplaceAll(lines[i], "\x1b[0m", "\x1b[0m"+bgSeq) + "\x1b[0m"
+		} else {
+			lines[i] = paneTextStyle.Render(padLineToWidth(lines[i], width))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -2177,10 +2320,39 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		if idx < 9 {
 			num = fmt.Sprintf("[%d]", idx+1)
 		}
-		plainLine := fmt.Sprintf("%s %-20s [%s]", num, env.Name, state)
+
+		// Check agent status across all windows
+		sessionStatus := AgentStatusIdle
+		if running {
+			sessionStatus = m.getSessionAgentStatus(env)
+		}
+		indicator := ""
+		if sessionStatus == AgentStatusCooking {
+			indicator = " ● Cooking"
+		} else if sessionStatus == AgentStatusAwaitingInput {
+			indicator = " ◆ Awaiting Input"
+		}
+
+		plainLine := fmt.Sprintf("%s %-20s [%s]%s", num, env.Name, state, indicator)
 		line := "  " + plainLine
 		if idx == m.selectedEnv {
-			line = renderStyledPaneLine(selectedLineStyle, "> "+plainLine, contentWidth)
+			if sessionStatus != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(sessionStatus)
+				selStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.SelectedBG)).
+					Bold(true)
+				line = renderStyledPaneLine(selStyle, "> "+plainLine, contentWidth)
+			} else {
+				line = renderStyledPaneLine(selectedLineStyle, "> "+plainLine, contentWidth)
+			}
+		} else if running && sessionStatus != AgentStatusIdle {
+			statusColor := m.getWindowStatusColor(sessionStatus)
+			stStyle := lipgloss.NewStyle().
+				Foreground(lipgloss.Color(statusColor)).
+				Background(lipgloss.Color(theme.PaneBG)).
+				Bold(true)
+			line = renderStyledPaneLine(stStyle, line, contentWidth)
 		} else {
 			if running {
 				line = renderStyledPaneLine(activeSessionStyle, line, contentWidth)
@@ -2591,56 +2763,556 @@ func (m Model) renderThemePickerPane(width, height int) string {
 	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
 }
 
-func (m Model) renderShortcutsPane(width, height int) string {
-	rows := []string{
-		"Global",
-		"1: focus [1] Sessions panel",
-		"2: focus [2] Windows panel",
-		"3: focus [3] Templates panel",
-		"tab: switch panel focus",
-		"ctrl+t: open theme picker",
-		"r: refresh sessions and config",
-		"q or ctrl+c: quit",
-		"",
-		"[1] Sessions panel",
-		"j/k or up/down: select environment",
-		"a: create environment",
-		"enter: attach to selected target",
-		"d: delete selected environment (press twice)",
-		"x: kill selected session (press twice)",
-		"h/l or left/right: keep focus on [1] Sessions panel",
-		"",
-		"[2] Windows panel",
-		"h/l or left/right: select window",
-		"j/k or up/down: select window",
-		"enter: attach to selected target",
-		"H/L: reorder window template",
-		"",
-		"[3] Templates panel",
-		"j/k or up/down: select template",
-		"a: create template",
-		"e or enter: edit selected template",
-		"d: delete selected template (press twice)",
-		"",
-		"Create Environment mode",
-		"tab or up/down: switch field",
-		"left/right on Template: choose template",
-		"enter: next field, then create",
-		"esc: cancel",
-		"",
-		"Create Template mode",
-		"tab or up/down: switch field",
-		"enter: next field, then save",
-		"esc: cancel",
-		"",
-		"Theme picker",
-		"type text: filter themes",
-		"j/k or up/down: move in result list",
-		"enter: apply selected theme",
-		"esc: close picker",
-		"",
-		"Press ? or Esc to close",
+// --- Fuzzy Search (Command Palette) ---
+
+func (m *Model) openFuzzySearch() tea.Cmd {
+	m.showFuzzySearch = true
+	m.showThemePicker = false
+	m.showShortcuts = false
+	m.fuzzySearchQuery.SetValue("")
+	m.fuzzySearchCursor = 0
+	m.fuzzySearchQuery.Focus()
+	m.fuzzySearchResults = m.computeFuzzySearchResults()
+	return textinput.Blink
+}
+
+func fuzzyMatch(query, target string) bool {
+	qi := 0
+	for i := 0; i < len(target) && qi < len(query); i++ {
+		if target[i] == query[qi] {
+			qi++
+		}
 	}
+	return qi == len(query)
+}
+
+func (m Model) computeFuzzySearchResults() []fuzzySearchItem {
+	query := strings.ToLower(strings.TrimSpace(m.fuzzySearchQuery.Value()))
+	var results []fuzzySearchItem
+
+	for envIdx, env := range m.environments {
+		session := tmux.SessionName(env.Name)
+		_, running := m.sessions[session]
+		sessionStatus := m.getSessionAgentStatus(env)
+
+		windows := m.windowNamesForEnv(env)
+
+		// Collect matching windows for this session
+		var matchedWindows []fuzzySearchItem
+		for winIdx, wName := range windows {
+			var status AgentStatus
+			var tags []string
+			if winIdx < len(env.Windows) {
+				tags = env.Windows[winIdx].Tags
+				if HasTag(env.Windows[winIdx], "ai") {
+					key := windowKey(session, wName)
+					if info, ok := m.windowProcessInfo[key]; ok {
+						status = info.Status
+					}
+				}
+			}
+
+			// Build searchable string: env name, window name, tags (with brackets), status
+			tagStr := ""
+			for _, t := range tags {
+				tagStr += " [" + t + "]"
+			}
+			searchStr := strings.ToLower(env.Name + " " + wName + tagStr)
+			if running {
+				searchStr += " running up"
+			}
+			switch status {
+			case AgentStatusCooking:
+				searchStr += " cooking"
+			case AgentStatusAwaitingInput:
+				searchStr += " awaiting input"
+			}
+
+			if query == "" || fuzzyMatch(query, searchStr) {
+				matchedWindows = append(matchedWindows, fuzzySearchItem{
+					EnvIndex:    envIdx,
+					WindowIndex: winIdx,
+					EnvName:     env.Name,
+					WindowName:  wName,
+					Status:      status,
+					Tags:        tags,
+					Running:     running,
+				})
+			}
+		}
+
+		// If any windows matched, add a session header + the windows
+		if len(matchedWindows) > 0 {
+			results = append(results, fuzzySearchItem{
+				EnvIndex:    envIdx,
+				WindowIndex: -1,
+				EnvName:     env.Name,
+				Status:      sessionStatus,
+				Running:     running,
+				IsHeader:    true,
+			})
+			results = append(results, matchedWindows...)
+		}
+	}
+	return results
+}
+
+func (m *Model) normalizeFuzzySearchCursor() {
+	if len(m.fuzzySearchResults) == 0 {
+		m.fuzzySearchCursor = 0
+		return
+	}
+	if m.fuzzySearchCursor < 0 {
+		m.fuzzySearchCursor = 0
+	}
+	if m.fuzzySearchCursor >= len(m.fuzzySearchResults) {
+		m.fuzzySearchCursor = len(m.fuzzySearchResults) - 1
+	}
+	// Skip header rows
+	if m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
+		m.fuzzySearchCursor++
+		if m.fuzzySearchCursor >= len(m.fuzzySearchResults) {
+			// Try going backwards instead
+			m.fuzzySearchCursor -= 2
+			for m.fuzzySearchCursor >= 0 && m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
+				m.fuzzySearchCursor--
+			}
+			if m.fuzzySearchCursor < 0 {
+				m.fuzzySearchCursor = 0
+			}
+		}
+	}
+}
+
+func (m *Model) moveFuzzySearchCursor(direction int) {
+	n := len(m.fuzzySearchResults)
+	if n == 0 {
+		return
+	}
+	m.fuzzySearchCursor += direction
+	// Clamp
+	if m.fuzzySearchCursor < 0 {
+		m.fuzzySearchCursor = 0
+	}
+	if m.fuzzySearchCursor >= n {
+		m.fuzzySearchCursor = n - 1
+	}
+	// Skip headers in the direction of movement
+	for m.fuzzySearchCursor >= 0 && m.fuzzySearchCursor < n && m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
+		m.fuzzySearchCursor += direction
+	}
+	// Final clamp
+	if m.fuzzySearchCursor < 0 {
+		m.fuzzySearchCursor = 0
+	}
+	if m.fuzzySearchCursor >= n {
+		m.fuzzySearchCursor = n - 1
+	}
+}
+
+func (m Model) updateFuzzySearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.showFuzzySearch = false
+		m.fuzzySearchQuery.Blur()
+		m.status = "Search closed."
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "up", "ctrl+k":
+		m.moveFuzzySearchCursor(-1)
+		return m, nil
+	case "down", "ctrl+j":
+		m.moveFuzzySearchCursor(1)
+		return m, nil
+	case "enter":
+		if m.fuzzySearchCursor < len(m.fuzzySearchResults) {
+			item := m.fuzzySearchResults[m.fuzzySearchCursor]
+			if item.IsHeader {
+				return m, nil
+			}
+			m.selectedEnv = item.EnvIndex
+			m.selectedWindow = item.WindowIndex
+			m.showFuzzySearch = false
+			m.fuzzySearchQuery.Blur()
+			m.focusPane = focusPaneWindows
+			return m.startAttachSelected()
+		}
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		m.fuzzySearchQuery, cmd = m.fuzzySearchQuery.Update(msg)
+		m.fuzzySearchResults = m.computeFuzzySearchResults()
+		m.fuzzySearchCursor = 0
+		m.normalizeFuzzySearchCursor()
+		return m, cmd
+	}
+}
+
+func (m Model) renderFuzzySearchPane(width, height int) string {
+	theme := m.currentTheme()
+	contentWidth := modalContentWidth(width)
+
+	promptW := lipgloss.Width(m.fuzzySearchQuery.Prompt)
+	inputW := contentWidth - promptW - 1
+	if inputW < 1 {
+		inputW = 1
+	}
+	m.fuzzySearchQuery.Width = inputW
+
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Background(lipgloss.Color(theme.PaneBG)).
+		Bold(true)
+	mutedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Muted)).
+		Background(lipgloss.Color(theme.PaneBG))
+	tagStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Background(lipgloss.Color(theme.PaneBG))
+
+	rows := []string{
+		m.fuzzySearchQuery.View(),
+		"",
+	}
+
+	// Count selectable items for footer
+	selectableCount := 0
+	for _, item := range m.fuzzySearchResults {
+		if !item.IsHeader {
+			selectableCount++
+		}
+	}
+
+	if selectableCount == 0 {
+		rows = append(rows, "  No matches found.")
+	} else {
+		visibleMax := height - 6
+		if visibleMax < 1 {
+			visibleMax = 1
+		}
+		start := 0
+		if m.fuzzySearchCursor >= start+visibleMax {
+			start = m.fuzzySearchCursor - visibleMax + 1
+		}
+		// Try to keep headers visible by scrolling up a bit
+		if start > 0 && start < len(m.fuzzySearchResults) && !m.fuzzySearchResults[start].IsHeader {
+			// Check if previous item is a header — if so, include it
+			if start-1 >= 0 && m.fuzzySearchResults[start-1].IsHeader {
+				start--
+			}
+		}
+		end := start + visibleMax
+		if end > len(m.fuzzySearchResults) {
+			end = len(m.fuzzySearchResults)
+		}
+
+		for listIdx := start; listIdx < end; listIdx++ {
+			item := m.fuzzySearchResults[listIdx]
+
+			if item.IsHeader {
+				// Session header row
+				runIndicator := "○"
+				if item.Running {
+					runIndicator = "●"
+				}
+				statusStr := ""
+				switch item.Status {
+				case AgentStatusCooking:
+					statusStr = "  ● Cooking"
+				case AgentStatusAwaitingInput:
+					statusStr = "  ◆ Awaiting Input"
+				}
+
+				headerText := fmt.Sprintf("  %s %s%s", runIndicator, item.EnvName, statusStr)
+				if item.Status != AgentStatusIdle {
+					statusColor := m.getWindowStatusColor(item.Status)
+					stStyle := lipgloss.NewStyle().
+						Foreground(lipgloss.Color(statusColor)).
+						Background(lipgloss.Color(theme.PaneBG)).
+						Bold(true)
+					rows = append(rows, stStyle.Render(fitLineToWidth(headerText, contentWidth)))
+				} else {
+					rows = append(rows, headerStyle.Render(fitLineToWidth(headerText, contentWidth)))
+				}
+				continue
+			}
+
+			// Window row (indented under session)
+			statusStr := ""
+			switch item.Status {
+			case AgentStatusCooking:
+				statusStr = "  ● Cooking"
+			case AgentStatusAwaitingInput:
+				statusStr = "  ◆ Awaiting Input"
+			}
+
+			// Tags rendered inline
+			tagStr := ""
+			for _, t := range item.Tags {
+				tagStr += " " + tagStyle.Render("["+t+"]")
+			}
+
+			windowText := item.WindowName + tagStr + statusStr
+
+			if listIdx == m.fuzzySearchCursor {
+				// Selected window
+				plainText := item.WindowName
+				for _, t := range item.Tags {
+					plainText += " [" + t + "]"
+				}
+				plainText += statusStr
+				if item.Status != AgentStatusIdle {
+					statusColor := m.getWindowStatusColor(item.Status)
+					selStyle := lipgloss.NewStyle().
+						Foreground(lipgloss.Color(statusColor)).
+						Background(lipgloss.Color(theme.SelectedBG)).
+						Bold(true)
+					rows = append(rows, renderStyledPaneLine(selStyle, "    > "+plainText, contentWidth))
+				} else {
+					rows = append(rows, renderStyledPaneLine(selectedLineStyle, "    > "+plainText, contentWidth))
+				}
+			} else if item.Status != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(item.Status)
+				stStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.PaneBG))
+				// Use plain text for status-colored lines
+				plainText := item.WindowName
+				for _, t := range item.Tags {
+					plainText += " [" + t + "]"
+				}
+				plainText += statusStr
+				rows = append(rows, stStyle.Render(fitLineToWidth("      "+plainText, contentWidth)))
+			} else {
+				rows = append(rows, mutedStyle.Render("      "+windowText))
+			}
+		}
+	}
+
+	rows = append(rows, "")
+	footerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Muted)).
+		Background(lipgloss.Color(theme.PaneBG))
+	footer := fmt.Sprintf("  %d windows | enter attach | esc close", selectableCount)
+	rows = append(rows, footerStyle.Render(footer))
+
+	return renderModalWithBorderTitle(width, height, "[/]-Search", strings.Join(rows, "\n"))
+}
+
+// shortcutItem represents a single shortcut entry in the shortcuts pane
+type shortcutItem struct {
+	key      string // key combo to display
+	desc     string // description
+	isHeader bool   // true = section header, not selectable
+	action   string // action identifier for execution (empty = not executable)
+}
+
+func (m *Model) shortcutMoveDown() {
+	items := shortcutsList()
+	for i := m.shortcutCursor + 1; i < len(items); i++ {
+		if !items[i].isHeader {
+			m.shortcutCursor = i
+			return
+		}
+	}
+}
+
+func (m *Model) shortcutMoveUp() {
+	items := shortcutsList()
+	for i := m.shortcutCursor - 1; i >= 0; i-- {
+		if !items[i].isHeader {
+			m.shortcutCursor = i
+			return
+		}
+	}
+}
+
+func (m Model) updateShortcutsMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "?":
+		m.showShortcuts = false
+		m.status = "Shortcuts closed."
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "j", "down":
+		m.shortcutMoveDown()
+		return m, nil
+	case "k", "up":
+		m.shortcutMoveUp()
+		return m, nil
+	case "enter":
+		items := shortcutsList()
+		if m.shortcutCursor < len(items) {
+			item := items[m.shortcutCursor]
+			if item.action != "" {
+				m.showShortcuts = false
+				return m.executeShortcutAction(item.action)
+			}
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) executeShortcutAction(action string) (tea.Model, tea.Cmd) {
+	switch action {
+	case "focus-sessions":
+		m.focusPane = focusPaneEnvironments
+		m.status = "Sessions panel focused"
+	case "focus-windows":
+		m.focusPane = focusPaneWindows
+		m.status = "Windows panel focused"
+	case "focus-templates":
+		m.focusPane = focusPaneTemplates
+		m.status = "Templates panel focused"
+	case "cycle-panels":
+		m.focusPane = (m.focusPane + 1) % 3
+	case "search":
+		m.showFuzzySearch = true
+		cmd := m.openFuzzySearch()
+		return m, cmd
+	case "next-ai":
+		m.jumpToNextCookingSession(1)
+		return m, m.captureCurrentWindowCmd()
+	case "themes":
+		m.showThemePicker = true
+		m.themePickerCursor = 0
+		m.status = "Theme picker open."
+	case "refresh":
+		return m, loadSessionsCmd()
+	case "quit":
+		return m, tea.Quit
+	case "create":
+		m.createMode = true
+		m.createField = createFieldName
+		m.createName.Focus()
+		m.status = "Create environment."
+	case "create-template":
+		m.templateMode = true
+		m.templateEditing = false
+		m.templateField = templateFieldName
+		m.templateName.Focus()
+		m.status = "Create template."
+	}
+	return m, nil
+}
+
+// shortcutsList returns the flat list of shortcut items (headers + bindings)
+func shortcutsList() []shortcutItem {
+	return []shortcutItem{
+		{desc: "Global", isHeader: true},
+		{"1", "focus sessions panel", false, "focus-sessions"},
+		{"2", "focus windows panel", false, "focus-windows"},
+		{"3", "focus templates panel", false, "focus-templates"},
+		{"tab", "cycle panels", false, "cycle-panels"},
+		{"ctrl+p", "search", false, "search"},
+		{"n/N", "next/prev ai window", false, "next-ai"},
+		{"ctrl+t", "theme picker", false, "themes"},
+		{"r", "refresh sessions", false, "refresh"},
+		{"q", "quit", false, "quit"},
+
+		{desc: "Sessions", isHeader: true},
+		{"j/k", "select prev/next", false, ""},
+		{"enter", "attach to session", false, ""},
+		{"a", "create environment", false, "create"},
+		{"d d", "delete environment", false, ""},
+		{"x x", "kill session", false, ""},
+
+		{desc: "Windows", isHeader: true},
+		{"h/l", "select prev/next", false, ""},
+		{"enter", "attach to window", false, ""},
+		{"H/L", "reorder window", false, ""},
+
+		{desc: "Templates", isHeader: true},
+		{"j/k", "select prev/next", false, ""},
+		{"a", "create template", false, "create-template"},
+		{"e", "edit template", false, ""},
+		{"d d", "delete template", false, ""},
+
+		{desc: "Search", isHeader: true},
+		{"ctrl+p", "open search", false, "search"},
+		{"↑/↓", "navigate results", false, ""},
+		{"enter", "attach to match", false, ""},
+		{"esc", "close search", false, ""},
+
+		{desc: "Create / Edit", isHeader: true},
+		{"tab", "next field", false, ""},
+		{"←/→", "cycle template", false, ""},
+		{"enter", "confirm", false, ""},
+		{"esc", "cancel", false, ""},
+
+		{desc: "Theme Picker", isHeader: true},
+		{"j/k", "navigate themes", false, ""},
+		{"enter", "apply theme", false, ""},
+		{"esc", "close picker", false, ""},
+	}
+}
+
+func (m Model) renderShortcutsPane(width, height int) string {
+	theme := m.currentTheme()
+	contentWidth := modalContentWidth(width)
+
+	headingStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true)
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SelectedFG)).
+		Bold(true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Muted))
+
+	items := shortcutsList()
+
+	// Viewport scrolling
+	visibleMax := height - 3
+	if visibleMax < 1 {
+		visibleMax = 1
+	}
+	start := 0
+	if m.shortcutCursor >= start+visibleMax {
+		start = m.shortcutCursor - visibleMax + 1
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + visibleMax
+	if end > len(items) {
+		end = len(items)
+	}
+
+	keyColW := 8
+
+	var rows []string
+	for i := start; i < end; i++ {
+		item := items[i]
+		if item.isHeader {
+			rows = append(rows, headingStyle.Render("  "+item.desc))
+			continue
+		}
+
+		pad := keyColW - len(item.key)
+		if pad < 1 {
+			pad = 1
+		}
+
+		k := keyStyle.Render(item.key)
+		d := descStyle.Render(item.desc)
+		line := "    " + k + strings.Repeat(" ", pad) + d
+
+		if i == m.shortcutCursor {
+			// Render as selected
+			plainLine := "    " + item.key + strings.Repeat(" ", pad) + item.desc
+			line = selectedLineStyle.Render(fitLineToWidth(plainLine, contentWidth))
+		}
+
+		rows = append(rows, line)
+	}
+
+	rows = append(rows, "")
+	rows = append(rows, descStyle.Render("  enter execute  ?/esc close"))
 
 	borderTitle := "[?]-Shortcuts"
 	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
@@ -3532,6 +4204,70 @@ func (m Model) getWindowStatusColor(status AgentStatus) string {
 	}
 }
 
+// jumpToNextCookingSession cycles to the next/previous session that has an active AI agent.
+func (m *Model) jumpToNextCookingSession(direction int) {
+	if len(m.environments) == 0 {
+		return
+	}
+	start := m.selectedEnv
+	for i := 1; i <= len(m.environments); i++ {
+		idx := (start + i*direction + len(m.environments)*2) % len(m.environments)
+		env := m.environments[idx]
+		session := tmux.SessionName(env.Name)
+		if _, running := m.sessions[session]; !running {
+			continue
+		}
+		status := m.getSessionAgentStatus(env)
+		if status == AgentStatusCooking || status == AgentStatusAwaitingInput {
+			m.selectedEnv = idx
+			m.selectedWindow = 0
+			m.focusPane = focusPaneEnvironments
+			statusLabel := "Cooking"
+			if status == AgentStatusAwaitingInput {
+				statusLabel = "Awaiting Input"
+			}
+			m.status = fmt.Sprintf("Jumped to %s (%s)", env.Name, statusLabel)
+			return
+		}
+	}
+	m.status = "No sessions with active AI agents found."
+}
+
+// windowNamesForEnv returns window names for a given environment, preferring live session windows.
+func (m Model) windowNamesForEnv(env config.Environment) []string {
+	session := tmux.SessionName(env.Name)
+	if windows, ok := m.sessionWindows[session]; ok && len(windows) > 0 {
+		return windows
+	}
+	return tmux.WindowNames(env)
+}
+
+// getSessionAgentStatus returns the highest-priority agent status across all windows of a session.
+// Priority: Cooking > AwaitingInput > Idle
+func (m Model) getSessionAgentStatus(env config.Environment) AgentStatus {
+	session := tmux.SessionName(env.Name)
+	windows := m.windowNamesForEnv(env)
+	highest := AgentStatusIdle
+	for i, wName := range windows {
+		if i >= len(env.Windows) {
+			continue
+		}
+		if !HasTag(env.Windows[i], "ai") {
+			continue
+		}
+		key := windowKey(session, wName)
+		if info, ok := m.windowProcessInfo[key]; ok {
+			if info.Status == AgentStatusCooking {
+				return AgentStatusCooking
+			}
+			if info.Status == AgentStatusAwaitingInput {
+				highest = AgentStatusAwaitingInput
+			}
+		}
+	}
+	return highest
+}
+
 // updateWindowProcessInfo updates the process info and status for a window
 func (m *Model) updateWindowProcessInfo(session, window string) {
 	log.Printf("[updateWindowProcessInfo] Starting check for session=%s window=%s", session, window)
@@ -3654,10 +4390,14 @@ func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo 
 
 // formatWindowLabel formats a window name with its status suffix
 func (m Model) formatWindowLabel(name string, status AgentStatus) string {
-	if status == AgentStatusIdle {
+	switch status {
+	case AgentStatusCooking:
+		return name + " ● Cooking"
+	case AgentStatusAwaitingInput:
+		return name + " ◆ Awaiting Input"
+	default:
 		return name
 	}
-	return name + "-" + string(status)
 }
 
 func previewTickCmd() tea.Cmd {
@@ -3681,18 +4421,18 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 	}
 
 	// Create commands to check agent status for all windows with [ai] tag
+	// across ALL running environments (not just current), so search shows status
 	var cmds []tea.Cmd
-	for _, w := range windows {
-		// Check if this window has [ai] tag
-		windowIdx := -1
-		for i, win := range windows {
-			if win == w {
-				windowIdx = i
-				break
-			}
+	for _, e := range m.environments {
+		s := tmux.SessionName(e.Name)
+		if _, live := m.sessions[s]; !live {
+			continue
 		}
-		if windowIdx >= 0 && windowIdx < len(env.Windows) && HasTag(env.Windows[windowIdx], "ai") {
-			cmds = append(cmds, checkAgentStatusCmd(session, w))
+		ws := m.windowNamesForEnv(e)
+		for i, w := range ws {
+			if i < len(e.Windows) && HasTag(e.Windows[i], "ai") {
+				cmds = append(cmds, checkAgentStatusCmd(s, w))
+			}
 		}
 	}
 

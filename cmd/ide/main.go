@@ -24,6 +24,17 @@ func main() {
 		log.SetOutput(io.Discard)
 	}
 
+	// Check for --search flag (used by tmux popup)
+	for _, arg := range os.Args[1:] {
+		if arg == "--search" {
+			p := tea.NewProgram(ui.NewSearchModel())
+			if _, err := p.Run(); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+	}
+
 	// Query the terminal background color before bubbletea takes over stdin.
 	termBG := terminal.QueryBackgroundColor()
 	log.Printf("terminal background color: %q", termBG)
