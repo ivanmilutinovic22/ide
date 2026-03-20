@@ -202,6 +202,11 @@ type Model struct {
 	fuzzySearchQuery      textinput.Model
 	fuzzySearchCursor     int
 	fuzzySearchResults    []fuzzySearchItem
+
+	// Path autocomplete state
+	pathCompletions []string // cached completions for current prefix
+	pathCompPrefix  string   // the prefix that generated the cache
+	pathCompIndex   int      // current index in completions
 }
 
 type configLoadedMsg struct {
@@ -887,7 +892,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Theme picker open. Type to filter, Enter to apply."
 			return m, cmd
 		}
-		if key == "/" || key == "ctrl+p" {
+		if key == "ctrl+p" {
 			if m.showFuzzySearch {
 				m.showFuzzySearch = false
 				m.fuzzySearchQuery.Blur()
@@ -2619,11 +2624,27 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createCustom.Blur()
 		m.status = "Create canceled."
 		return m, nil
-	case "tab", "down":
+	case "tab":
+		if m.createField == createFieldRoot {
+			m.completePathField(&m.createRoot)
+			return m, nil
+		}
 		m.shiftCreateField(1)
 		m.focusCreateField()
 		return m, nil
-	case "shift+tab", "up":
+	case "down":
+		m.shiftCreateField(1)
+		m.focusCreateField()
+		return m, nil
+	case "shift+tab":
+		if m.createField == createFieldRoot {
+			m.completePathFieldReverse(&m.createRoot)
+			return m, nil
+		}
+		m.shiftCreateField(-1)
+		m.focusCreateField()
+		return m, nil
+	case "up":
 		m.shiftCreateField(-1)
 		m.focusCreateField()
 		return m, nil
@@ -2676,11 +2697,100 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case createFieldName:
 		m.createName, cmd = m.createName.Update(msg)
 	case createFieldRoot:
+		m.resetPathCompletion()
 		m.createRoot, cmd = m.createRoot.Update(msg)
 	case createFieldCustomWindows:
 		m.createCustom, cmd = m.createCustom.Update(msg)
 	}
 	return m, cmd
+}
+
+// completePathField cycles forward through path completions for a text input.
+func (m *Model) completePathField(ti *textinput.Model) {
+	m.pathComplete(ti, 1)
+}
+
+// completePathFieldReverse cycles backward through path completions.
+func (m *Model) completePathFieldReverse(ti *textinput.Model) {
+	m.pathComplete(ti, -1)
+}
+
+func (m *Model) pathComplete(ti *textinput.Model, dir int) {
+	val := ti.Value()
+
+	// Expand ~ to home dir
+	expanded := val
+	if strings.HasPrefix(expanded, "~/") || expanded == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			expanded = home + expanded[1:]
+		}
+	}
+
+	// Determine the directory to list and the prefix to match
+	searchDir := expanded
+	prefix := ""
+	if !strings.HasSuffix(expanded, "/") {
+		searchDir = filepath.Dir(expanded)
+		prefix = filepath.Base(expanded)
+	}
+
+	// Build cache key from the dir + prefix
+	cacheKey := searchDir + "\x00" + prefix
+
+	if cacheKey != m.pathCompPrefix || len(m.pathCompletions) == 0 {
+		// Rebuild completions
+		m.pathCompPrefix = cacheKey
+		m.pathCompIndex = 0
+		m.pathCompletions = nil
+
+		entries, err := os.ReadDir(searchDir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
+				continue // skip hidden unless user typed a dot
+			}
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+				continue
+			}
+			full := filepath.Join(searchDir, name)
+			if e.IsDir() {
+				full += "/"
+			}
+			// Convert back to ~/... for display
+			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(full, home) {
+				full = "~" + full[len(home):]
+			}
+			m.pathCompletions = append(m.pathCompletions, full)
+		}
+		sort.Strings(m.pathCompletions)
+		if len(m.pathCompletions) == 0 {
+			return
+		}
+	} else {
+		// Cycle through existing completions
+		m.pathCompIndex += dir
+		if m.pathCompIndex >= len(m.pathCompletions) {
+			m.pathCompIndex = 0
+		}
+		if m.pathCompIndex < 0 {
+			m.pathCompIndex = len(m.pathCompletions) - 1
+		}
+	}
+
+	ti.SetValue(m.pathCompletions[m.pathCompIndex])
+	ti.SetCursor(len(ti.Value()))
+	m.status = fmt.Sprintf("(%d/%d)", m.pathCompIndex+1, len(m.pathCompletions))
+}
+
+// resetPathCompletion clears the autocomplete cache when the user types.
+func (m *Model) resetPathCompletion() {
+	m.pathCompletions = nil
+	m.pathCompPrefix = ""
+	m.pathCompIndex = 0
 }
 
 func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
@@ -3153,6 +3263,20 @@ func (m Model) updateShortcutsMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
+		// Try to match the pressed key to a shortcut and execute it
+		pressed := msg.String()
+		for _, item := range shortcutsList() {
+			if item.isHeader || item.action == "" {
+				continue
+			}
+			// Match against each key in the shortcut (e.g. "n/N" matches "n" or "N")
+			for _, k := range strings.Split(item.key, "/") {
+				if k == pressed {
+					m.showShortcuts = false
+					return m.executeShortcutAction(item.action)
+				}
+			}
+		}
 		return m, nil
 	}
 }
