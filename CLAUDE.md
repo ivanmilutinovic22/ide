@@ -20,6 +20,8 @@ With prior knowledge at hand
 Be concise.
 Sacrifice grammar for brevity.
 
-## LSP
+## Navigating/editing
 
 Use lsp like golsp whenever you can instead of grep etc..
+
+Use eza --tree to always be aware of project structure
