@@ -203,10 +203,7 @@ type Model struct {
 	fuzzySearchCursor     int
 	fuzzySearchResults    []fuzzySearchItem
 
-	// Path autocomplete state
-	pathCompletions []string // cached completions for current prefix
-	pathCompPrefix  string   // the prefix that generated the cache
-	pathCompIndex   int      // current index in completions
+
 }
 
 type configLoadedMsg struct {
@@ -675,6 +672,7 @@ func applyTextInputTheme(ti *textinput.Model, theme uiTheme) {
 	ti.TextStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
 	ti.PromptStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
 	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(muted).Background(bg)
+	ti.CompletionStyle = lipgloss.NewStyle().Foreground(muted).Background(bg)
 	ti.Cursor.TextStyle = lipgloss.NewStyle().Foreground(fg).Background(bg)
 }
 
@@ -859,6 +857,7 @@ func NewModel(terminalBG string) Model {
 	}
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")
+	m.createRoot.ShowSuggestions = true
 	m.createCustom = newTextInput("Windows: ", "")
 	m.templateName = newTextInput("Name: ", "")
 	m.templateSpec = newTextInput("Windows: ", "")
@@ -1081,6 +1080,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		log.Printf("[Update] Received agentStatusUpdateMsg for session=%s window=%s", msg.session, msg.window)
 		// Update the window process info based on the message
 		m.updateWindowProcessInfoFromMsg(msg.session, msg.window, msg.procInfo)
+		// Refresh search results so status changes appear live
+		if m.showFuzzySearch {
+			m.fuzzySearchResults = m.computeFuzzySearchResults()
+		}
 		return m, nil
 
 	case previewTickMsg:
@@ -2625,26 +2628,30 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = "Create canceled."
 		return m, nil
 	case "tab":
+		// On root field, let textinput handle tab for path autocomplete
 		if m.createField == createFieldRoot {
-			m.completePathField(&m.createRoot)
-			return m, nil
+			break // fall through to textinput delegate
 		}
 		m.shiftCreateField(1)
 		m.focusCreateField()
 		return m, nil
 	case "down":
+		// On root field with suggestions, cycle to next suggestion
+		if m.createField == createFieldRoot {
+			break // fall through to textinput delegate (NextSuggestion)
+		}
 		m.shiftCreateField(1)
 		m.focusCreateField()
 		return m, nil
-	case "shift+tab":
+	case "up":
+		// On root field with suggestions, cycle to prev suggestion
 		if m.createField == createFieldRoot {
-			m.completePathFieldReverse(&m.createRoot)
-			return m, nil
+			break // fall through to textinput delegate (PrevSuggestion)
 		}
 		m.shiftCreateField(-1)
 		m.focusCreateField()
 		return m, nil
-	case "up":
+	case "shift+tab":
 		m.shiftCreateField(-1)
 		m.focusCreateField()
 		return m, nil
@@ -2697,32 +2704,27 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case createFieldName:
 		m.createName, cmd = m.createName.Update(msg)
 	case createFieldRoot:
-		m.resetPathCompletion()
 		m.createRoot, cmd = m.createRoot.Update(msg)
+		m.updatePathSuggestions(&m.createRoot)
 	case createFieldCustomWindows:
 		m.createCustom, cmd = m.createCustom.Update(msg)
 	}
 	return m, cmd
 }
 
-// completePathField cycles forward through path completions for a text input.
-func (m *Model) completePathField(ti *textinput.Model) {
-	m.pathComplete(ti, 1)
-}
-
-// completePathFieldReverse cycles backward through path completions.
-func (m *Model) completePathFieldReverse(ti *textinput.Model) {
-	m.pathComplete(ti, -1)
-}
-
-func (m *Model) pathComplete(ti *textinput.Model, dir int) {
+// updatePathSuggestions feeds filesystem path completions to a textinput's
+// built-in suggestion system, which renders them as grey ghost text.
+func (m *Model) updatePathSuggestions(ti *textinput.Model) {
 	val := ti.Value()
+	if val == "" {
+		ti.SetSuggestions(nil)
+		return
+	}
 
-	// Expand ~ to home dir
+	// Expand ~ to home dir for filesystem lookup
 	expanded := val
 	if strings.HasPrefix(expanded, "~/") || expanded == "~" {
-		home, err := os.UserHomeDir()
-		if err == nil {
+		if home, err := os.UserHomeDir(); err == nil {
 			expanded = home + expanded[1:]
 		}
 	}
@@ -2735,62 +2737,33 @@ func (m *Model) pathComplete(ti *textinput.Model, dir int) {
 		prefix = filepath.Base(expanded)
 	}
 
-	// Build cache key from the dir + prefix
-	cacheKey := searchDir + "\x00" + prefix
-
-	if cacheKey != m.pathCompPrefix || len(m.pathCompletions) == 0 {
-		// Rebuild completions
-		m.pathCompPrefix = cacheKey
-		m.pathCompIndex = 0
-		m.pathCompletions = nil
-
-		entries, err := os.ReadDir(searchDir)
-		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
-				continue // skip hidden unless user typed a dot
-			}
-			if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
-				continue
-			}
-			full := filepath.Join(searchDir, name)
-			if e.IsDir() {
-				full += "/"
-			}
-			// Convert back to ~/... for display
-			if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(full, home) {
-				full = "~" + full[len(home):]
-			}
-			m.pathCompletions = append(m.pathCompletions, full)
-		}
-		sort.Strings(m.pathCompletions)
-		if len(m.pathCompletions) == 0 {
-			return
-		}
-	} else {
-		// Cycle through existing completions
-		m.pathCompIndex += dir
-		if m.pathCompIndex >= len(m.pathCompletions) {
-			m.pathCompIndex = 0
-		}
-		if m.pathCompIndex < 0 {
-			m.pathCompIndex = len(m.pathCompletions) - 1
-		}
+	entries, err := os.ReadDir(searchDir)
+	if err != nil {
+		ti.SetSuggestions(nil)
+		return
 	}
 
-	ti.SetValue(m.pathCompletions[m.pathCompIndex])
-	ti.SetCursor(len(ti.Value()))
-	m.status = fmt.Sprintf("(%d/%d)", m.pathCompIndex+1, len(m.pathCompletions))
-}
-
-// resetPathCompletion clears the autocomplete cache when the user types.
-func (m *Model) resetPathCompletion() {
-	m.pathCompletions = nil
-	m.pathCompPrefix = ""
-	m.pathCompIndex = 0
+	var suggestions []string
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
+			continue
+		}
+		full := filepath.Join(searchDir, name)
+		if e.IsDir() {
+			full += "/"
+		}
+		// Convert back to ~/... for display (must match the input prefix)
+		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(val, "~") && strings.HasPrefix(full, home) {
+			full = "~" + full[len(home):]
+		}
+		suggestions = append(suggestions, full)
+	}
+	sort.Strings(suggestions)
+	ti.SetSuggestions(suggestions)
 }
 
 func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
@@ -2912,9 +2885,9 @@ func (m Model) computeFuzzySearchResults() []fuzzySearchItem {
 		for winIdx, wName := range windows {
 			var status AgentStatus
 			var tags []string
-			if winIdx < len(env.Windows) {
-				tags = env.Windows[winIdx].Tags
-				if HasTag(env.Windows[winIdx], "ai") {
+			if tmpl, ok := findWindowTemplate(env, wName); ok {
+				tags = tmpl.Tags
+				if HasTag(tmpl, "ai") {
 					key := windowKey(session, wName)
 					if info, ok := m.windowProcessInfo[key]; ok {
 						status = info.Status
@@ -3970,6 +3943,16 @@ func extractTags(entry *string) []string {
 }
 
 // HasTag checks if a window template has a specific tag
+// findWindowTemplate finds a config window template by name within an environment.
+func findWindowTemplate(env config.Environment, windowName string) (config.WindowTemplate, bool) {
+	for _, w := range env.Windows {
+		if w.Name == windowName {
+			return w, true
+		}
+	}
+	return config.WindowTemplate{}, false
+}
+
 func HasTag(w config.WindowTemplate, tag string) bool {
 	for _, t := range w.Tags {
 		if strings.EqualFold(t, tag) {
@@ -4372,11 +4355,9 @@ func (m Model) getSessionAgentStatus(env config.Environment) AgentStatus {
 	session := tmux.SessionName(env.Name)
 	windows := m.windowNamesForEnv(env)
 	highest := AgentStatusIdle
-	for i, wName := range windows {
-		if i >= len(env.Windows) {
-			continue
-		}
-		if !HasTag(env.Windows[i], "ai") {
+	for _, wName := range windows {
+		tmpl, ok := findWindowTemplate(env, wName)
+		if !ok || !HasTag(tmpl, "ai") {
 			continue
 		}
 		key := windowKey(session, wName)
@@ -4531,38 +4512,36 @@ func previewTickCmd() tea.Cmd {
 }
 
 func (m Model) captureCurrentWindowCmd() tea.Cmd {
-	env, ok := m.currentEnv()
-	if !ok {
-		return nil
-	}
-	session := tmux.SessionName(env.Name)
-	if _, live := m.sessions[session]; !live {
-		return nil
-	}
-	windows := m.currentWindowNames()
-	if len(windows) == 0 || m.selectedWindow >= len(windows) {
-		return nil
-	}
-
-	// Create commands to check agent status for all windows with [ai] tag
-	// across ALL running environments (not just current), so search shows status
 	var cmds []tea.Cmd
+
+	// Check agent status for all AI windows across ALL running environments
 	for _, e := range m.environments {
 		s := tmux.SessionName(e.Name)
 		if _, live := m.sessions[s]; !live {
 			continue
 		}
 		ws := m.windowNamesForEnv(e)
-		for i, w := range ws {
-			if i < len(e.Windows) && HasTag(e.Windows[i], "ai") {
+		for _, w := range ws {
+			if tmpl, ok := findWindowTemplate(e, w); ok && HasTag(tmpl, "ai") {
 				cmds = append(cmds, checkAgentStatusCmd(s, w))
 			}
 		}
 	}
 
-	// Also capture the pane preview
-	cmds = append(cmds, capturePaneCmd(session, windows[m.selectedWindow]))
+	// Also capture the pane preview for the currently selected window
+	if env, ok := m.currentEnv(); ok {
+		session := tmux.SessionName(env.Name)
+		if _, live := m.sessions[session]; live {
+			windows := m.currentWindowNames()
+			if len(windows) > 0 && m.selectedWindow < len(windows) {
+				cmds = append(cmds, capturePaneCmd(session, windows[m.selectedWindow]))
+			}
+		}
+	}
 
+	if len(cmds) == 0 {
+		return nil
+	}
 	return tea.Batch(cmds...)
 }
 
