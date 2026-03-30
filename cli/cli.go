@@ -1,4 +1,4 @@
-package cmd
+package cli
 
 import (
 	"flag"
@@ -6,7 +6,7 @@ import (
 	"ide/run"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func Exec(args []string) int {
@@ -14,7 +14,7 @@ func Exec(args []string) int {
 
 	// run main cmd i.e ide
 	if len(args) == 0 {
-		p := tea.NewProgram(initialModel())
+		p := tea.NewProgram(run.Ide())
 		if _, err := p.Run(); err != nil {
 			fmt.Printf("Alas, there's been an error: %v", err)
 			return 1

@@ -1,10 +1,10 @@
 .PHONY: build run fmt vet test clean
 
 build:
-	go build -o ./build/ide ./cmd/ide
+	go build -o ./build/ide .
 
 run:
-	go run ./cmd/ide
+	go run .
 
 fmt:
 	go fmt ./...

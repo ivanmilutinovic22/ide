@@ -1,18 +1,10 @@
 package main
 
 import (
-	"ide/cmd"
+	"ide/cli"
 	"os"
 )
 
 func main() {
-	os.Exit(exec())
-}
-
-func exec() int {
-	err := cmd.RunIde()
-	if err != nil {
-		return 1
-	}
-	return 0
+	os.Exit(cli.Exec(os.Args[1:]))
 }
