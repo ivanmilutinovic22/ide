@@ -17,6 +17,7 @@ type Window struct {
 	Cmd  string `yaml:"cmd,omitempty"`
 }
 
+// TODO: Move these from config package
 type Session struct {
 	Name    string   `yaml:"name"`
 	Root    string   `yaml:"root,omitempty"`
@@ -35,7 +36,7 @@ type Config struct {
 	Templates []Template `yaml:"templates,omitempty"`
 }
 
-func ConfigPath() (string, error) {
+func Path() (string, error) {
 	// XDG_CONFIG_HOME takes priority; falls back to ~/.config
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -49,7 +50,7 @@ func ConfigPath() (string, error) {
 }
 
 func Load() (Config, error) {
-	path, err := ConfigPath()
+	path, err := Path()
 	if err != nil {
 		return Config{}, err
 	}
@@ -81,7 +82,7 @@ func defaultTemplates() []Template {
 }
 
 func Save(cfg Config) error {
-	path, err := ConfigPath()
+	path, err := Path()
 	if err != nil {
 		return err
 	}
