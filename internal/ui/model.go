@@ -202,8 +202,8 @@ type Model struct {
 	fuzzySearchQuery      textinput.Model
 	fuzzySearchCursor     int
 	fuzzySearchResults    []fuzzySearchItem
-
-
+	terminalMode          bool              // true = keys forwarded to embedded PTY
+	embeddedTerm          *EmbeddedTerminal // live PTY + VT emulator
 }
 
 type configLoadedMsg struct {
@@ -868,7 +868,9 @@ func NewModel(terminalBG string) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(loadConfigCmd(), loadSessionsCmd(), previewTickCmd())
+	return tea.Batch(loadConfigCmd(), loadSessionsCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return previewTickMsg{}
+	}))
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -876,10 +878,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.terminalMode && m.embeddedTerm != nil {
+			_, rightWidth := splitPaneWidths(m.width - 1)
+			contentWidth := paneContentWidth(rightWidth)
+			bodyHeight := m.height - 2
+			if bodyHeight < 1 {
+				bodyHeight = 1
+			}
+			previewHeight := bodyHeight - 4
+			if previewHeight < 1 {
+				previewHeight = 1
+			}
+			m.embeddedTerm.Resize(contentWidth, previewHeight)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
 		key := msg.String()
+
+		// Terminal mode: forward all keys to tmux except the exit key.
+		// Must be checked before global shortcuts so keys like ? and
+		// ctrl+t reach the embedded terminal.
+		if m.terminalMode && !m.showFuzzySearch && !m.showThemePicker && !m.showShortcuts {
+			return m.updateTerminalMode(key)
+		}
+
 		if key == "ctrl+t" {
 			if m.showThemePicker {
 				m.showThemePicker = false
@@ -887,6 +910,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Theme picker closed."
 				return m, nil
 			}
+			m.terminalMode = false
 			cmd := m.openThemePicker()
 			m.status = "Theme picker open. Type to filter, Enter to apply."
 			return m, cmd
@@ -898,6 +922,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Search closed."
 				return m, nil
 			}
+			m.terminalMode = false
 			cmd := m.openFuzzySearch()
 			m.status = "Search open. Type to filter, Enter to attach."
 			return m, cmd
@@ -906,7 +931,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showThemePicker = false
 			m.showShortcuts = !m.showShortcuts
 			if m.showShortcuts {
-				// Start cursor on first non-header item
+				m.terminalMode = false
 				m.shortcutCursor = 0
 				items := shortcutsList()
 				for i, item := range items {
@@ -950,6 +975,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if pane, ok := parsePaneShortcut(key); ok {
 			m.focusPane = pane
+			m.terminalMode = false
+			if m.embeddedTerm != nil {
+				m.embeddedTerm.Close()
+				m.embeddedTerm = nil
+			}
 			m.status = focusedPaneStatus(pane)
 			return m, m.captureCurrentWindowCmd()
 		}
@@ -974,8 +1004,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch key {
 		case "q", "ctrl+c":
+			if m.embeddedTerm != nil {
+				m.embeddedTerm.Close()
+			}
 			return m, tea.Quit
 		case "tab":
+			m.terminalMode = false
+			if m.embeddedTerm != nil {
+				m.embeddedTerm.Close()
+				m.embeddedTerm = nil
+			}
 			m.toggleFocusPane()
 			m.status = focusedPaneStatus(m.focusPane)
 			return m, m.captureCurrentWindowCmd()
@@ -1086,8 +1124,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ptyReadMsg:
+		// New PTY output was processed into the VT emulator; keep reading
+		if m.embeddedTerm != nil && !m.embeddedTerm.IsClosed() {
+			return m, readPTYCmd(m.embeddedTerm)
+		}
+		return m, nil
+
+	case ptyEOFMsg:
+		// PTY closed (tmux detached or session killed)
+		m.terminalMode = false
+		if m.embeddedTerm != nil {
+			m.embeddedTerm.Close()
+			m.embeddedTerm = nil
+		}
+		m.status = "Terminal closed."
+		return m, loadSessionsCmd()
+
+	case terminalSessionReadyMsg:
+		if msg.err != nil {
+			m.status = "Session start failed: " + msg.err.Error()
+			return m, nil
+		}
+		// Session was just created. Directly enter terminal mode since we know
+		// the session exists even though our sessions map hasn't refreshed yet.
+		env, ok := m.currentEnv()
+		if !ok {
+			m.status = "No environment selected."
+			return m, nil
+		}
+		session := tmux.SessionName(env.Name)
+		// Add to sessions map immediately so enterTerminalMode finds it
+		m.sessions[session] = struct{}{}
+		// Also populate sessionWindows
+		if wl, err := tmux.ListWindows(session); err == nil {
+			m.sessionWindows[session] = wl
+		}
+		return m.enterTerminalMode()
+
 	case previewTickMsg:
-		return m, tea.Batch(m.captureCurrentWindowCmd(), previewTickCmd())
+		return m, tea.Batch(m.captureCurrentWindowCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+			return previewTickMsg{}
+		}))
 
 	case themePersistedMsg:
 		if msg.err != nil {
@@ -1498,7 +1576,7 @@ func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "L":
 		return m.startMoveWindow(1)
 	case "enter":
-		return m.startAttachSelected()
+		return m.enterTerminalMode()
 	default:
 		return m, nil
 	}
@@ -2044,6 +2122,12 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("esc", "cancel"),
 		}, sep)
 	}
+	if m.terminalMode {
+		return strings.Join([]string{
+			m.shortcutHint("ctrl+]", "exit terminal"),
+			m.shortcutHint("", "keys → tmux"),
+		}, sep)
+	}
 
 	// Context-specific hints first, then global
 	var hints []string
@@ -2057,7 +2141,7 @@ func (m Model) contextShortcutHints() string {
 	case focusPaneWindows:
 		hints = append(hints,
 			m.shortcutHint("h/l", "select"),
-			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("enter", "terminal"),
 			m.shortcutHint("H/L", "reorder"),
 		)
 	case focusPaneTemplates:
@@ -2412,61 +2496,29 @@ func (m Model) renderTemplatesPane(width, height int) string {
 func (m Model) renderDetailsPane(width, height int) string {
 	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneWindows
 	theme := m.currentTheme()
-	title := panelTitle("w", "Windows", focused, theme)
 	env, ok := m.currentEnv()
+
+	// Title changes based on terminal mode
+	if m.terminalMode {
+		title := panelTitle("w", "Terminal — Ctrl+] exit", true, theme)
+		if !ok {
+			body := strings.Join([]string{"", "No environment selected."}, "\n")
+			return renderPaneWithTitle(width, height, title, body, true)
+		}
+		return m.renderTerminalPane(width, height, title, env)
+	}
+
+	title := panelTitle("w", "Windows", focused, theme)
 	if !ok {
 		body := strings.Join([]string{"", "No environment selected."}, "\n")
 		return renderPaneWithTitle(width, height, title, body, focused)
 	}
 
 	contentWidth := paneContentWidth(width)
-
 	windows := m.currentWindowNames()
 	session := tmux.SessionName(env.Name)
-	tabs := make([]string, 0, len(windows))
-	for i, w := range windows {
-		// Get agent status for this window
-		status := m.getWindowAgentStatus(session, w)
 
-		// Format label with status suffix
-		label := m.formatWindowLabel(w, status)
-		if i < 9 {
-			label = fmt.Sprintf("[%d] %s", i+1, label)
-		}
-
-		// Choose style based on status and selection
-		if i == m.selectedWindow {
-			// Selected window - use status color if active, otherwise accent
-			if status != AgentStatusIdle {
-				statusColor := m.getWindowStatusColor(status)
-				statusStyle := lipgloss.NewStyle().
-					Foreground(lipgloss.Color(statusColor)).
-					Background(lipgloss.Color(theme.PaneBG)).
-					Bold(true)
-				tabs = append(tabs, statusStyle.Render(label))
-			} else {
-				tabs = append(tabs, selectedWindowBoxStyle.Render(label))
-			}
-		} else {
-			// Unselected window - use status color if active
-			if status != AgentStatusIdle {
-				statusColor := m.getWindowStatusColor(status)
-				statusStyle := lipgloss.NewStyle().
-					Foreground(lipgloss.Color(statusColor)).
-					Background(lipgloss.Color(theme.PaneBG))
-				tabs = append(tabs, statusStyle.Render(label))
-			} else {
-				tabs = append(tabs, windowBoxStyle.Render(label))
-			}
-		}
-	}
-	sepStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(theme.PaneBG)).
-		Foreground(lipgloss.Color(theme.Muted))
-	tabsLine := strings.Join(tabs, sepStyle.Render(" - "))
-	if ansi.StringWidth(tabsLine) > contentWidth {
-		tabsLine = ansi.Cut(tabsLine, 0, contentWidth)
-	}
+	tabsLine := m.renderWindowTabs(windows, session, contentWidth, theme)
 
 	selectedWindowName := ""
 	selectedWindowCmd := ""
@@ -2490,8 +2542,6 @@ func (m Model) renderDetailsPane(width, height int) string {
 		Background(lipgloss.Color(theme.SelectedBG)).
 		ColorWhitespace(true)
 
-	// Top section: tabs + shaded info lines.
-	// tabsLine is 3 visual lines (bordered boxes); each other entry is 1 line.
 	topRows := []string{tabsLine, ""}
 	if strings.TrimSpace(selectedWindowCwd) != "" {
 		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Cwd: %s", selectedWindowCwd), contentWidth))
@@ -2504,25 +2554,113 @@ func (m Model) renderDetailsPane(width, height int) string {
 	}
 	topRows = append(topRows, "") // blank separator before preview
 
-	// tabsLine contributes 1 visual line; every other entry contributes 1.
 	topVisualHeight := len(topRows)
-
-	// Preview fills the remaining space below the top section.
-	contentHeight := height - 1                          // subtract title line
-	previewHeight := contentHeight - topVisualHeight - 1 // -1 for bottom pane margin
+	contentHeight := height - 1
+	previewHeight := contentHeight - topVisualHeight - 1
 	if previewHeight < 0 {
 		previewHeight = 0
 	}
 
+	previewRows := m.renderPreviewRows(session, selectedWindowName, usingLiveWindows, contentWidth, previewHeight, theme)
+
+	allRows := append(topRows, previewRows...)
+	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), focused)
+}
+
+// renderTerminalPane renders the details pane in interactive terminal mode.
+// Minimizes chrome to maximize the terminal display area.
+func (m Model) renderTerminalPane(width, height int, title string, env config.Environment) string {
+	contentWidth := paneContentWidth(width)
+	windows := m.currentWindowNames()
+	session := tmux.SessionName(env.Name)
+	theme := m.currentTheme()
+
+	tabsLine := m.renderWindowTabs(windows, session, contentWidth, theme)
+
+	// In terminal mode: just tabs + blank + terminal output (no info section)
+	topRows := []string{tabsLine, ""}
+	topVisualHeight := len(topRows)
+
+	contentHeight := height - 1
+	previewHeight := contentHeight - topVisualHeight - 1
+	if previewHeight < 0 {
+		previewHeight = 0
+	}
+
+	// Render from the embedded VT emulator
+	var terminalRows []string
+	if m.embeddedTerm != nil && previewHeight > 0 {
+		rendered := m.embeddedTerm.Render(contentWidth, previewHeight)
+		if rendered != "" {
+			terminalRows = strings.Split(rendered, "\n")
+		}
+	}
+
+	// Pad to exact height
+	previewBGColor := m.terminalBG
+	if previewBGColor == "" {
+		previewBGColor = theme.PaneBG
+	}
+	previewBGStyle := lipgloss.NewStyle().Background(lipgloss.Color(previewBGColor))
+	for len(terminalRows) < previewHeight {
+		terminalRows = append(terminalRows, previewBGStyle.Render(strings.Repeat(" ", contentWidth)))
+	}
+
+	allRows := append(topRows, terminalRows...)
+	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), true)
+}
+
+// renderWindowTabs builds the tab bar string for window tabs.
+func (m Model) renderWindowTabs(windows []string, session string, contentWidth int, theme uiTheme) string {
+	tabs := make([]string, 0, len(windows))
+	for i, w := range windows {
+		status := m.getWindowAgentStatus(session, w)
+		label := m.formatWindowLabel(w, status)
+		if i < 9 {
+			label = fmt.Sprintf("[%d] %s", i+1, label)
+		}
+
+		if i == m.selectedWindow {
+			if status != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(status)
+				sStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.PaneBG)).
+					Bold(true)
+				tabs = append(tabs, sStyle.Render(label))
+			} else {
+				tabs = append(tabs, selectedWindowBoxStyle.Render(label))
+			}
+		} else {
+			if status != AgentStatusIdle {
+				statusColor := m.getWindowStatusColor(status)
+				sStyle := lipgloss.NewStyle().
+					Foreground(lipgloss.Color(statusColor)).
+					Background(lipgloss.Color(theme.PaneBG))
+				tabs = append(tabs, sStyle.Render(label))
+			} else {
+				tabs = append(tabs, windowBoxStyle.Render(label))
+			}
+		}
+	}
+	sepStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(theme.PaneBG)).
+		Foreground(lipgloss.Color(theme.Muted))
+	tabsLine := strings.Join(tabs, sepStyle.Render(" - "))
+	if ansi.StringWidth(tabsLine) > contentWidth {
+		tabsLine = ansi.Cut(tabsLine, 0, contentWidth)
+	}
+	return tabsLine
+}
+
+// renderPreviewRows renders the tmux pane capture content as display rows.
+func (m Model) renderPreviewRows(session, windowName string, usingLiveWindows bool, contentWidth, previewHeight int, theme uiTheme) []string {
 	previewRows := make([]string, 0, previewHeight)
 	hasPreview := usingLiveWindows &&
 		m.previewSession == session &&
-		m.previewWindow == selectedWindowName &&
+		m.previewWindow == windowName &&
 		strings.TrimSpace(m.previewContent) != ""
 
-	// Build styles/sequences for the terminal's own background.
-	// Fallback chain: explicit BG detected in captured content → real terminal
-	// background queried via OSC 11 at startup → theme default.
 	previewBGColor := m.previewBG
 	if previewBGColor == "" {
 		previewBGColor = m.terminalBG
@@ -2548,30 +2686,24 @@ func (m Model) renderDetailsPane(width, height int) string {
 			}
 			padding := max(0, contentWidth-lineWidth)
 			if strings.Contains(line, "\x1b[") {
-				// ANSI content: inject bg at start and after every reset so
-				// the pane background never bleeds through.
 				line = injectBGIntoLine(line, previewBGSeq)
 				if padding > 0 {
 					line = line + previewBGSeq + strings.Repeat(" ", padding)
 				}
 			} else {
-				// Plain text: render the full line width with terminal bg.
 				line = previewBGStyle.Render(padLineToWidth(line, contentWidth))
 			}
 			previewRows = append(previewRows, line)
 		}
 	} else if !usingLiveWindows && previewHeight > 0 {
-		placeholder := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Inactive)).Render("No active session")
+		placeholder := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Inactive)).Render("No active session — Enter to start")
 		previewRows = append(previewRows, placeholder)
 	}
 
-	// Pad preview to exact height with terminal background.
 	for len(previewRows) < previewHeight {
 		previewRows = append(previewRows, previewBGStyle.Render(strings.Repeat(" ", contentWidth)))
 	}
-
-	allRows := append(topRows, previewRows...)
-	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), focused)
+	return previewRows
 }
 
 func (m Model) renderCreatePane(width, height int) string {
@@ -3320,8 +3452,9 @@ func shortcutsList() []shortcutItem {
 
 		{desc: "Windows", isHeader: true},
 		{"h/l", "select prev/next", false, ""},
-		{"enter", "attach to window", false, ""},
+		{"enter", "enter terminal mode", false, ""},
 		{"H/L", "reorder window", false, ""},
+		{"ctrl+]", "exit terminal mode", false, ""},
 
 		{desc: "Templates", isHeader: true},
 		{"j/k", "select prev/next", false, ""},
@@ -4503,12 +4636,6 @@ func (m Model) formatWindowLabel(name string, status AgentStatus) string {
 	default:
 		return name
 	}
-}
-
-func previewTickCmd() tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
-		return previewTickMsg{}
-	})
 }
 
 func (m Model) captureCurrentWindowCmd() tea.Cmd {

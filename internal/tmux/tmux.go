@@ -100,7 +100,7 @@ func ListWindows(session string) ([]string, error) {
 }
 
 func HasWindow(session, window string) (bool, error) {
-	window = safeWindowName(window)
+	window = SafeWindowName(window)
 	if window == "" {
 		return true, nil
 	}
@@ -130,7 +130,7 @@ func EnsureSession(env config.Environment) error {
 	}
 
 	first := env.Windows[0]
-	firstName := safeWindowName(first.Name)
+	firstName := SafeWindowName(first.Name)
 	firstCwd := resolveCwd(env.Root, first.Cwd)
 
 	args := []string{"new-session", "-d", "-s", session, "-n", firstName}
@@ -148,7 +148,7 @@ func EnsureSession(env config.Environment) error {
 	log.Printf("EnsureSession: session %q created", session)
 
 	for i, w := range env.Windows[1:] {
-		name := safeWindowName(w.Name)
+		name := SafeWindowName(w.Name)
 		cwd := resolveCwd(env.Root, w.Cwd)
 		args = []string{"new-window", "-t", session, "-n", name}
 		if cwd != "" {
@@ -186,7 +186,7 @@ func AttachTarget(env config.Environment, windowName string) string {
 	if strings.TrimSpace(windowName) == "" {
 		return session
 	}
-	return session + ":" + safeWindowName(windowName)
+	return session + ":" + SafeWindowName(windowName)
 }
 
 func WindowNames(env config.Environment) []string {
@@ -195,7 +195,7 @@ func WindowNames(env config.Environment) []string {
 	}
 	out := make([]string, 0, len(env.Windows))
 	for _, w := range env.Windows {
-		out = append(out, safeWindowName(w.Name))
+		out = append(out, SafeWindowName(w.Name))
 	}
 	return out
 }
@@ -215,7 +215,7 @@ func resolveCwd(root, override string) string {
 	return filepath.Join(root, override)
 }
 
-func safeWindowName(name string) string {
+func SafeWindowName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "shell"
@@ -243,7 +243,7 @@ func shellQuote(value string) string {
 }
 
 func CurrentProcess(session, window string) string {
-	target := session + ":" + safeWindowName(window)
+	target := session + ":" + SafeWindowName(window)
 	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -254,7 +254,7 @@ func CurrentProcess(session, window string) string {
 }
 
 func CapturePane(session, window string) (string, error) {
-	target := session + ":" + safeWindowName(window)
+	target := session + ":" + SafeWindowName(window)
 	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-t", target)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -283,7 +283,7 @@ type ProcessInfo struct {
 // It sums CPU usage across all descendant processes of the pane's shell,
 // giving an accurate picture of total activity in the pane.
 func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
-	target := session + ":" + safeWindowName(window)
+	target := session + ":" + SafeWindowName(window)
 
 	// Get pane PID (this is the shell process)
 	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}")
