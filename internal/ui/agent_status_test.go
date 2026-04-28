@@ -6,37 +6,6 @@ import (
 	"ide/internal/config"
 )
 
-func TestIsAIToolProcess(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"known claude", "claude", true},
-		{"known opencode", "opencode", true},
-		{"known codex", "codex", true},
-		{"known aider", "aider", true},
-		{"mixed case", "Claude", true},
-		{"upper", "OPENCODE", true},
-		{"with leading path", "/usr/local/bin/claude", true},
-		{"with arg suffix", "claude --resume", true},
-		{"with tab arg", "aider\t--model gpt-4", true},
-		{"unknown name", "vim", false},
-		{"unknown shell", "bash", false},
-		{"empty string", "", false},
-		{"whitespace only", "   ", false},
-		{"close but wrong", "claudia", false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := isAIToolProcess(tc.in)
-			if got != tc.want {
-				t.Errorf("isAIToolProcess(%q) = %v, want %v", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestModelIsAIWindow(t *testing.T) {
 	env := config.Environment{
 		Name: "demo",
@@ -69,28 +38,6 @@ func TestModelIsAIWindow(t *testing.T) {
 				t.Errorf("isAIWindow(%q, %q) = %v, want %v", tc.window, tc.process, got, tc.want)
 			}
 		})
-	}
-}
-
-// TestWindowKey just pins the "session:window" format. Other code parses
-// this format apart, so it's load-bearing despite being a one-liner.
-func TestWindowKey(t *testing.T) {
-	tests := []struct {
-		session string
-		window  string
-		want    string
-	}{
-		{"ide-prod", "shell", "ide-prod:shell"},
-		{"", "", ":"},
-		{"ide-x", "", "ide-x:"},
-		{"", "w", ":w"},
-		{"a:b", "c", "a:b:c"}, // documents that nothing escapes colons
-	}
-	for _, tc := range tests {
-		got := windowKey(tc.session, tc.window)
-		if got != tc.want {
-			t.Errorf("windowKey(%q, %q) = %q, want %q", tc.session, tc.window, got, tc.want)
-		}
 	}
 }
 

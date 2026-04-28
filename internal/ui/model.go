@@ -7,7 +7,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"ide/internal/agentstatus"
 	"ide/internal/config"
+	"ide/internal/theme"
 )
 
 var (
@@ -84,33 +86,21 @@ const (
 	templateFieldWindows
 )
 
-// AgentStatus represents the detected status of an AI agent
-type AgentStatus string
-
-const (
-	AgentStatusIdle          AgentStatus = "idle"
-	AgentStatusCooking       AgentStatus = "cooking"
-	AgentStatusAwaitingInput AgentStatus = "awaiting_input"
+// AgentStatus, ProcessInfo, and WindowProcessInfo are re-exports of the
+// agentstatus package types so callers in this package can keep using the
+// shorter local names. The actual definitions and pure detection logic
+// live in internal/agentstatus.
+type (
+	AgentStatus       = agentstatus.Status
+	ProcessInfo       = agentstatus.ProcessInfo
+	WindowProcessInfo = agentstatus.WindowInfo
 )
 
-// ProcessInfo tracks process metrics for agent status detection
-type ProcessInfo struct {
-	PID       int
-	CPU       float64
-	State     string // R, S, D, T, etc.
-	Timestamp time.Time
-}
-
-// WindowProcessInfo holds process info for a specific window
-type WindowProcessInfo struct {
-	Current          ProcessInfo
-	Previous         ProcessInfo
-	Status           AgentStatus
-	LowActivityCount int     // Consecutive samples with low activity
-	BaselineCPU      float64 // Average CPU when idle (awaiting_input)
-	SampleCount      int     // Number of samples taken for baseline
-	Command          string  // Most recently observed pane_current_command
-}
+const (
+	AgentStatusIdle          = agentstatus.StatusIdle
+	AgentStatusCooking       = agentstatus.StatusCooking
+	AgentStatusAwaitingInput = agentstatus.StatusAwaitingInput
+)
 
 // fuzzySearchItem represents a single item in the fuzzy search results.
 // IsHeader=true marks a session group header (not selectable).
@@ -137,24 +127,13 @@ type fuzzyEnvCacheEntry struct {
 	windows []fuzzyWinCacheEntry
 }
 
-type uiTheme struct {
-	Name       string
-	AppBG      string
-	AppFG      string
-	PaneBG     string
-	Border     string
-	SelectedFG string
-	SelectedBG string
-	Active     string
-	Inactive   string
-	Accent     string
-	Muted      string
-	Status     string
-}
+// uiTheme is an alias for theme.Theme so existing callers in this package
+// don't need to be rewritten. New code should reference theme.Theme directly.
+type uiTheme = theme.Theme
 
 const (
-	defaultThemeAppBG = "#1a1a1a"
-	defaultThemeAppFG = "#dddddd"
+	defaultThemeAppBG = theme.DefaultAppBG
+	defaultThemeAppFG = theme.DefaultAppFG
 )
 
 type Model struct {

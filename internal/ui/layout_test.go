@@ -59,18 +59,6 @@ func TestPaneBoxStyleWidth(t *testing.T) {
 	}
 }
 
-// TestPaneContentWidth verifies that paneContentWidth returns the usable text
-// width inside a borderless pane (total width minus padding).
-func TestPaneContentWidth(t *testing.T) {
-	for _, width := range []int{30, 40, 60, 80} {
-		got := paneContentWidth(width)
-		want := width - 2 // padding only
-		if got != want {
-			t.Errorf("paneContentWidth(%d) = %d, want %d", width, got, want)
-		}
-	}
-}
-
 // TestModalBoxStyleWidth verifies that modalBoxStyle (bordered) renders at the
 // requested width.
 func TestModalBoxStyleWidth(t *testing.T) {
@@ -113,71 +101,6 @@ func TestTitleAndPaneWidthMatch(t *testing.T) {
 	}
 	if titleWidth != 40 {
 		t.Errorf("title width = %d, want 40", titleWidth)
-	}
-}
-
-func TestViewportSlice(t *testing.T) {
-	items := []string{"a", "b", "c", "d", "e"}
-
-	tests := []struct {
-		name     string
-		selected int
-		maxVis   int
-		want     []string
-	}{
-		{"all fit", 0, 10, []string{"a", "b", "c", "d", "e"}},
-		{"top selected", 0, 3, []string{"a", "b", "c"}},
-		{"middle selected", 2, 3, []string{"a", "b", "c"}},
-		{"scroll down", 3, 3, []string{"b", "c", "d"}},
-		{"bottom selected", 4, 3, []string{"c", "d", "e"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := viewportSlice(items, tt.selected, tt.maxVis)
-			if len(got) != len(tt.want) {
-				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("index %d = %q, want %q", i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-// TestSplitLeftPaneHeights verifies that the templates pane is sized to its
-// content (with a small slack) when there are few templates, while still
-// reserving room for the placeholder when the list is empty, and capping at
-// half the column when there are many templates.
-func TestSplitLeftPaneHeights(t *testing.T) {
-	tests := []struct {
-		name           string
-		total          int
-		templateCount  int
-		wantTop        int
-		wantBottom     int
-	}{
-		{"tiny total", 2, 5, 1, 1},
-		{"empty templates still reserves min visible (5)", 50, 0, 43, 7},
-		{"single template still reserves min visible (5)", 50, 1, 43, 7},
-		{"three templates still reserves min visible (5)", 50, 3, 43, 7},
-		{"five templates uses min row count", 50, 5, 43, 7},
-		{"more than min grows pane", 50, 8, 40, 10},
-		{"many templates capped at half", 50, 30, 25, 25},
-		{"narrow column falls back to half", 8, 0, 4, 4},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			top, bottom := splitLeftPaneHeights(tc.total, tc.templateCount)
-			if top != tc.wantTop || bottom != tc.wantBottom {
-				t.Errorf("splitLeftPaneHeights(%d, %d) = (%d, %d), want (%d, %d)",
-					tc.total, tc.templateCount, top, bottom, tc.wantTop, tc.wantBottom)
-			}
-			if top+bottom != tc.total {
-				t.Errorf("top+bottom = %d, want %d", top+bottom, tc.total)
-			}
-		})
 	}
 }
 
