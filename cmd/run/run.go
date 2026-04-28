@@ -6,7 +6,7 @@ import (
 	"os"
 	"slices"
 
-	iderun "ide/run"
+	"ide/run"
 )
 
 // Dispatch parses argv and runs the matching subcommand. Returns a process
@@ -14,7 +14,7 @@ import (
 func Dispatch() int {
 	args := os.Args[1:]
 	if slices.Contains(args, "--search") {
-		return iderun.Search()
+		return run.Search()
 	}
-	return iderun.Main()
+	return run.Main()
 }
