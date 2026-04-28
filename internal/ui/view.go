@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"ide/internal/config"
+	"ide/internal/layout"
 	"ide/internal/tmux"
 )
 
@@ -20,7 +21,7 @@ func (m Model) View() string {
 
 	leftWidth, rightWidth := splitPaneWidths(m.width - 1) // -1 for horizontal gap
 
-	bodyHeight := m.height - 1 // -1 status bar (no gap, body sits flush against it)
+	bodyHeight := m.height - 2 // -1 status bar, -1 separator rule above it
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
@@ -112,7 +113,12 @@ func (m Model) View() string {
 	statusBgSeq := bgANSISeq(statusStyle.GetBackground())
 	statusText = statusBgSeq + strings.ReplaceAll(statusText, "\x1b[0m", "\x1b[0m"+statusBgSeq) + "\x1b[0m"
 	status := statusStyle.Width(m.width).Render(statusText)
-	rendered := lipgloss.JoinVertical(lipgloss.Left, body, status)
+	separatorBG := darkenHex(theme.AppBG, 0.5)
+	separator := lipgloss.NewStyle().
+		Background(lipgloss.Color(separatorBG)).
+		Width(m.width).
+		Render("")
+	rendered := lipgloss.JoinVertical(lipgloss.Left, body, separator, status)
 
 	if m.width > 0 && m.height > 0 {
 		rendered = lipgloss.Place(
@@ -146,76 +152,14 @@ func modalBoxStyle(width, height int) lipgloss.Style {
 	return modalPaneStyle.Width(width-modalPaneStyle.GetHorizontalFrameSize()).Height(height).Padding(0, 1)
 }
 
-func splitPaneWidths(total int) (int, int) {
-	leftWidth := total / 3
-	if leftWidth < 28 {
-		leftWidth = 28
-	}
-	if leftWidth > 44 {
-		leftWidth = 44
-	}
-
-	rightWidth := total - leftWidth
-	if rightWidth < 28 && total >= 56 {
-		rightWidth = 28
-		leftWidth = total - rightWidth
-	}
-	if rightWidth < 1 {
-		rightWidth = 1
-		leftWidth = total - rightWidth
-	}
-	if leftWidth < 1 {
-		leftWidth = 1
-	}
-
-	return leftWidth, rightWidth
-}
-
+// splitPaneWidths, modalPopupDimensions, and paneContentWidth are thin
+// shims around internal/layout so callers in this package don't need to be
+// rewritten. The pure geometry math lives in internal/layout.
+func splitPaneWidths(total int) (int, int) { return layout.SplitPaneWidths(total) }
 func modalPopupDimensions(bodyWidth, bodyHeight, desiredWidth, desiredHeight int) (int, int) {
-	popupWidth := desiredWidth
-	if popupWidth > 96 {
-		popupWidth = 96
-	}
-	if popupWidth > bodyWidth-2 {
-		popupWidth = bodyWidth - 2
-	}
-	if popupWidth < 44 {
-		popupWidth = 44
-	}
-	if popupWidth > bodyWidth {
-		popupWidth = bodyWidth
-	}
-	if popupWidth < 1 {
-		popupWidth = 1
-	}
-
-	popupHeight := desiredHeight
-	if popupHeight > 20 {
-		popupHeight = 20
-	}
-	if popupHeight > bodyHeight-2 {
-		popupHeight = bodyHeight - 2
-	}
-	if popupHeight < 10 {
-		popupHeight = 10
-	}
-	if popupHeight > bodyHeight {
-		popupHeight = bodyHeight
-	}
-	if popupHeight < 1 {
-		popupHeight = 1
-	}
-
-	return popupWidth, popupHeight
+	return layout.ModalPopupDimensions(bodyWidth, bodyHeight, desiredWidth, desiredHeight)
 }
-
-func paneContentWidth(width int) int {
-	contentWidth := width - 2 // -2 for Padding(0,1) in paneBoxStyle; no border frame
-	if contentWidth < 0 {
-		return 0
-	}
-	return contentWidth
-}
+func paneContentWidth(width int) int { return layout.PaneContentWidth(width) }
 
 func modalContentWidth(width int) int {
 	contentWidth := width - modalPaneStyle.GetHorizontalFrameSize() - 2 // border frame + padding
@@ -325,7 +269,7 @@ func (m Model) contextShortcutHints() string {
 	}
 	if m.terminalMode {
 		return strings.Join([]string{
-			m.shortcutHint("ctrl+]", "exit terminal"),
+			m.shortcutHint("ctrl+q", "exit terminal"),
 			m.shortcutHint("", "keys → tmux"),
 		}, sep)
 	}
@@ -338,6 +282,7 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("j/k", "select"),
 			m.shortcutHint("enter", "attach"),
 			m.shortcutHint("a", "create"),
+			m.shortcutHint("d", "delete"),
 		)
 	case focusPaneWindows:
 		hints = append(hints,
@@ -350,6 +295,7 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("j/k", "select"),
 			m.shortcutHint("a", "create"),
 			m.shortcutHint("e", "edit"),
+			m.shortcutHint("d", "delete"),
 		)
 	}
 	// Always available globals — kept short so the bar reads at a glance.
@@ -379,22 +325,7 @@ func panelTitle(shortcut string, name string, focused bool, theme uiTheme) strin
 }
 
 func viewportSlice(rows []string, selected, maxVisible int) []string {
-	if len(rows) <= maxVisible {
-		return rows
-	}
-	start := 0
-	if selected > maxVisible-1 {
-		start = selected - maxVisible + 1
-	}
-	end := start + maxVisible
-	if end > len(rows) {
-		end = len(rows)
-		start = end - maxVisible
-	}
-	if start < 0 {
-		start = 0
-	}
-	return rows[start:end]
+	return layout.ViewportSlice(rows, selected, maxVisible)
 }
 
 func truncateLines(s string, maxLines int) string {
@@ -567,40 +498,8 @@ func backdropSegment(segment string) string {
 	return backdropStyle.Render(ansi.Strip(segment))
 }
 
-// splitLeftPaneHeights divides the left column between Sessions (top) and
-// Templates (bottom). Templates always reserves room for ~5 rows so adding
-// a few templates doesn't reflow the layout each time, but it never claims
-// more than half the column. Sessions takes the rest.
 func splitLeftPaneHeights(total, templateCount int) (int, int) {
-	if total <= 2 {
-		return 1, 1
-	}
-
-	// At least templatesMinVisible rows of body so the user always sees a
-	// few entries (or has room to scroll a longer list). Grow with content,
-	// shrink to half the column max.
-	const templatesMinVisible = 5
-	rows := templateCount
-	if rows < templatesMinVisible {
-		rows = templatesMinVisible
-	}
-	desired := 1 + rows + 1 // title + rows + slack
-
-	cap := total / 2
-	if cap < 3 {
-		cap = 3
-	}
-	if desired > cap {
-		desired = cap
-	}
-
-	bottom := desired
-	top := total - bottom
-	if top < 1 {
-		top = 1
-		bottom = total - 1
-	}
-	return top, bottom
+	return layout.SplitLeftPaneHeights(total, templateCount)
 }
 
 func (m Model) renderEnvironmentPane(width, height int) string {
@@ -636,9 +535,9 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		}
 		indicator := ""
 		if sessionStatus == AgentStatusCooking {
-			indicator = " ● Cooking"
+			indicator = " ●"
 		} else if sessionStatus == AgentStatusAwaitingInput {
-			indicator = " ◆ Awaiting"
+			indicator = " ◆"
 		}
 
 		plainLine := fmt.Sprintf("%s %-20s [%s]%s", num, env.Name, state, indicator)
@@ -1108,9 +1007,9 @@ func (m Model) renderFuzzySearchPane(width, height int) string {
 				statusStr := ""
 				switch item.Status {
 				case AgentStatusCooking:
-					statusStr = "  ● Cooking"
+					statusStr = "  ●"
 				case AgentStatusAwaitingInput:
-					statusStr = "  ◆ Awaiting Input"
+					statusStr = "  ◆"
 				}
 
 				headerText := fmt.Sprintf("  %s %s%s", runIndicator, item.EnvName, statusStr)
@@ -1131,9 +1030,9 @@ func (m Model) renderFuzzySearchPane(width, height int) string {
 			statusStr := ""
 			switch item.Status {
 			case AgentStatusCooking:
-				statusStr = "  ● Cooking"
+				statusStr = "  ●"
 			case AgentStatusAwaitingInput:
-				statusStr = "  ◆ Awaiting Input"
+				statusStr = "  ◆"
 			}
 
 			// Tags rendered inline
@@ -1202,10 +1101,25 @@ func (m Model) renderShortcutsPane(width, height int) string {
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Muted))
 
+	cookingGlyph := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.getWindowStatusColor(AgentStatusCooking))).
+		Bold(true).
+		Render("●")
+	awaitingGlyph := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.getWindowStatusColor(AgentStatusAwaitingInput))).
+		Bold(true).
+		Render("◆")
+	legend := []string{
+		headingStyle.Render("  Legend"),
+		"    " + cookingGlyph + descStyle.Render("  Cooking — agent is working"),
+		"    " + awaitingGlyph + descStyle.Render("  Awaiting — agent needs input"),
+		"",
+	}
+
 	items := shortcutsList()
 
 	// Viewport scrolling
-	visibleMax := height - 3
+	visibleMax := height - 3 - len(legend)
 	if visibleMax < 1 {
 		visibleMax = 1
 	}
@@ -1223,7 +1137,7 @@ func (m Model) renderShortcutsPane(width, height int) string {
 
 	keyColW := 8
 
-	var rows []string
+	rows := append([]string{}, legend...)
 	for i := start; i < end; i++ {
 		item := items[i]
 		if item.isHeader {
@@ -1324,6 +1238,23 @@ func colorRGB(color string) (int, int, int) {
 	}
 	c := ansi16[n]
 	return c[0], c[1], c[2]
+}
+
+// darkenHex returns color scaled toward black by factor (0..1; 1.0 = unchanged, 0.0 = black).
+// Always returns a "#rrggbb" hex string so it can be passed to lipgloss.Color.
+func darkenHex(color string, factor float64) string {
+	if factor < 0 {
+		factor = 0
+	}
+	if factor > 1 {
+		factor = 1
+	}
+	r, g, b := colorRGB(color)
+	return fmt.Sprintf("#%02x%02x%02x",
+		int(float64(r)*factor),
+		int(float64(g)*factor),
+		int(float64(b)*factor),
+	)
 }
 
 // colorLuminance returns perceptual luminance (0–255) of a lipgloss color string.

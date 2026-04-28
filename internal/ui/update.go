@@ -336,7 +336,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.enterTerminalMode()
 
 	case previewTickMsg:
-		return m, tea.Batch(m.captureCurrentWindowCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Batch(m.captureCurrentWindowCmd(), loadSessionsCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 			return previewTickMsg{}
 		}))
 
@@ -1404,7 +1404,7 @@ func shortcutsList() []shortcutItem {
 		{"h/l", "select prev/next", false, ""},
 		{"enter", "enter terminal mode", false, ""},
 		{"H/L", "reorder window", false, ""},
-		{"ctrl+]", "exit terminal mode", false, ""},
+		{"ctrl+q", "exit terminal mode", false, ""},
 
 		{desc: "Templates", isHeader: true},
 		{"j/k", "select prev/next", false, ""},

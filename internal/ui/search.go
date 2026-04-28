@@ -436,13 +436,13 @@ func (m SearchModel) View() string {
 			statusStyled := ""
 			switch item.status {
 			case AgentStatusCooking:
-				statusPlain = " ● Cooking"
+				statusPlain = " ●"
 				statusStyled = lipgloss.NewStyle().
 					Foreground(lipgloss.Color("#fbbf24")).
 					Bold(true).
 					Render(statusPlain)
 			case AgentStatusAwaitingInput:
-				statusPlain = " ◆ Awaiting"
+				statusPlain = " ◆"
 				statusStyled = lipgloss.NewStyle().
 					Foreground(lipgloss.Color("#22d3ee")).
 					Bold(true).

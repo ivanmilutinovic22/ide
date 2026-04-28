@@ -3,53 +3,19 @@ package ui
 import (
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
+	"ide/internal/agentstatus"
 	"ide/internal/config"
 	"ide/internal/tmux"
 )
 
-// aiToolNames is the set of process names recognised as known AI-agent CLIs.
-// Lookup is case-insensitive; values are stored lowercase and stripped of
-// any path or argument noise before comparison.
-var aiToolNames = map[string]struct{}{
-	"claude":       {}, // Anthropic Claude Code (npm @anthropic-ai/claude-code)
-	"opencode":     {}, // sst/opencode terminal AI agent
-	"codex":        {}, // openai/codex CLI
-	"aider":        {}, // Aider-AI/aider pair programmer
-	"gemini":       {}, // google-gemini/gemini-cli
-	"cursor-agent": {}, // Cursor CLI agent
-	"copilot":      {}, // github/copilot-cli (npm @github/copilot)
-	"crush":        {}, // charmbracelet/crush
-	"goose":        {}, // block/goose AI agent
-	"cn":           {}, // continuedev/continue CLI
-	"jules":        {}, // Google Jules Tools CLI
-	"mods":         {}, // charmbracelet/mods
-	"llm":          {}, // simonw/llm
-	"sgpt":         {}, // TheR1D/shell_gpt and tbckr/sgpt
-	"shell-gpt":    {}, // TheR1D/shell_gpt alias
-	"tgpt":         {}, // aandrew-me/tgpt
-	"chatgpt":      {}, // j178/chatgpt and similar interactive CLIs
-	"q":            {}, // Amazon Q Developer CLI (q chat)
-}
-
-// isAIToolProcess reports whether a foreground process name (e.g. the value
-// returned by `tmux.CurrentProcess`) belongs to a known AI-agent CLI.
-func isAIToolProcess(name string) bool {
-	if name == "" {
-		return false
-	}
-	// tmux returns just the binary name, but be defensive against paths/args.
-	name = strings.ToLower(strings.TrimSpace(name))
-	if i := strings.IndexAny(name, " \t"); i >= 0 {
-		name = name[:i]
-	}
-	if i := strings.LastIndex(name, "/"); i >= 0 {
-		name = name[i+1:]
-	}
-	_, ok := aiToolNames[name]
-	return ok
+// isAIToolProcess and windowKey are thin shims around the agentstatus
+// package so existing call sites in this package don't need to be rewritten.
+func isAIToolProcess(name string) bool      { return agentstatus.IsAITool(name) }
+func windowKey(session, window string) string { return agentstatus.Key(session, window) }
+func detectAgentStatus(current ProcessInfo, currentStatus AgentStatus, lowActivityCount int, baselineCPU float64, sampleCount int) (AgentStatus, int, float64, int) {
+	return agentstatus.Detect(current, currentStatus, lowActivityCount, baselineCPU, sampleCount)
 }
 
 // isAIWindow reports whether the window should be tracked as an AI agent
@@ -60,110 +26,6 @@ func (m Model) isAIWindow(env config.Environment, windowName, currentProcess str
 		return true
 	}
 	return isAIToolProcess(currentProcess)
-}
-
-// Agent status detection functions
-
-// detectAgentStatus determines the agent status with hysteresis and adaptive baseline:
-// - Uses baseline CPU (average when idle) to detect significant increases
-// - Cooking: State == "R" OR CPU > baseline + 15% OR CPU > baseline * 1.5
-// - Awaiting: State != "R" AND CPU <= baseline + 10%
-// - Baseline is continuously updated when in awaiting_input state
-func detectAgentStatus(current ProcessInfo, currentStatus AgentStatus, lowActivityCount int, baselineCPU float64, sampleCount int) (AgentStatus, int, float64, int) {
-	// Calculate thresholds using ORIGINAL baseline (before any updates)
-	// This prevents high CPU readings from corrupting the baseline before cooking detection
-	effectiveBaseline := baselineCPU
-	if effectiveBaseline < 1.0 {
-		effectiveBaseline = 1.0
-	}
-
-	// Cooking threshold: CPU must be significantly above baseline
-	// Use +5% absolute or 1.3x multiplier, whichever gives lower threshold
-	cookingThreshold := effectiveBaseline + 5.0
-	if effectiveBaseline*1.3 > cookingThreshold {
-		cookingThreshold = effectiveBaseline * 1.3
-	}
-
-	// High activity detection:
-	// Primary: CPU exceeds threshold (indicates real work)
-	// Agents like opencode use 10-18% CPU when actually working vs 4-5% when idle
-	// Threshold of baseline + 5% reliably catches this (9% when baseline is 4%)
-	cpuElevated := current.CPU > cookingThreshold
-	isHighActivity := cpuElevated
-	// To exit cooking state, we need CPU to drop below threshold
-	// This creates natural hysteresis without a dead zone
-	isLowActivity := current.CPU <= cookingThreshold
-
-	log.Printf("[AGENT-DEBUG] detectAgentStatus: CPU=%.1f, State=%s, baseline=%.1f, threshold=%.1f, currentStatus=%s, sampleCount=%d",
-		current.CPU, current.State, baselineCPU, cookingThreshold, currentStatus, sampleCount)
-
-	switch currentStatus {
-	case AgentStatusCooking:
-		if isHighActivity {
-			log.Printf("[AGENT-DEBUG] Still cooking (high activity)")
-			return AgentStatusCooking, 0, baselineCPU, sampleCount
-		}
-		if isLowActivity {
-			newCount := lowActivityCount + 1
-			log.Printf("[AGENT-DEBUG] Low activity detected, count=%d/3", newCount)
-			if newCount >= 3 {
-				log.Printf("[AGENT-DEBUG] Switching to awaiting_input")
-				return AgentStatusAwaitingInput, 0, baselineCPU, sampleCount
-			}
-			return AgentStatusCooking, newCount, baselineCPU, sampleCount
-		}
-		return AgentStatusCooking, lowActivityCount, baselineCPU, sampleCount
-
-	case AgentStatusAwaitingInput, AgentStatusIdle:
-		if isHighActivity {
-			// Switch to cooking immediately, do NOT update baseline with high CPU reading
-			return AgentStatusCooking, 0, baselineCPU, sampleCount
-		}
-		// Stay awaiting_input and update baseline with this (low) CPU reading
-		newBaseline := baselineCPU
-		newSampleCount := sampleCount
-		if sampleCount == 0 {
-			newBaseline = current.CPU
-			newSampleCount = 1
-		} else if sampleCount < 20 {
-			// Build up initial baseline (first 20 samples)
-			newBaseline = (baselineCPU*float64(sampleCount) + current.CPU) / float64(sampleCount+1)
-			newSampleCount = sampleCount + 1
-		} else {
-			// Rolling average with more weight on recent samples
-			newBaseline = baselineCPU*0.9 + current.CPU*0.1
-			newSampleCount = sampleCount
-		}
-		return AgentStatusAwaitingInput, 0, newBaseline, newSampleCount
-
-	default:
-		// For new windows, start with awaiting_input and build baseline
-		// Don't immediately assume cooking on first high reading
-		// Collect samples first to establish proper baseline
-		log.Printf("[AGENT-DEBUG] New window, sampleCount=%d", sampleCount)
-		if sampleCount < 10 {
-			// First 10 samples: just collect baseline, stay in awaiting
-			newBaseline := current.CPU
-			newSampleCount := sampleCount + 1
-			if sampleCount > 0 {
-				newBaseline = (baselineCPU*float64(sampleCount) + current.CPU) / float64(sampleCount+1)
-			}
-			log.Printf("[AGENT-DEBUG] Initializing sample %d, baseline=%.1f", newSampleCount, newBaseline)
-			return AgentStatusAwaitingInput, 0, newBaseline, newSampleCount
-		}
-
-		// After 10 samples, use normal logic
-		if isHighActivity {
-			log.Printf("[AGENT-DEBUG] High activity detected after init, switching to cooking")
-			return AgentStatusCooking, 0, baselineCPU, sampleCount
-		}
-		return AgentStatusAwaitingInput, 0, current.CPU, 1
-	}
-}
-
-// windowKey creates a unique key for a window
-func windowKey(session, window string) string {
-	return session + ":" + window
 }
 
 // getWindowAgentStatus returns the current agent status for a window
@@ -393,9 +255,9 @@ func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo 
 func (m Model) formatWindowLabel(name string, status AgentStatus) string {
 	switch status {
 	case AgentStatusCooking:
-		return name + " ● Cooking"
+		return name + " ●"
 	case AgentStatusAwaitingInput:
-		return name + " ◆ Awaiting Input"
+		return name + " ◆"
 	default:
 		return name
 	}

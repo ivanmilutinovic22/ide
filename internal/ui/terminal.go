@@ -306,13 +306,13 @@ func (m Model) enterTerminalMode() (tea.Model, tea.Cmd) {
 
 	m.embeddedTerm = et
 	m.terminalMode = true
-	m.status = "Terminal mode — Ctrl+] to exit"
+	m.status = "Terminal mode — Ctrl+q to exit"
 	return m, readPTYCmd(et)
 }
 
 // updateTerminalMode handles key events when in interactive terminal mode.
 func (m Model) updateTerminalMode(key string) (tea.Model, tea.Cmd) {
-	if key == "ctrl+]" {
+	if key == "ctrl+q" {
 		m.terminalMode = false
 		if m.embeddedTerm != nil {
 			m.embeddedTerm.Close()
