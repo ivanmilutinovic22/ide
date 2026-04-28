@@ -20,7 +20,7 @@ func (m Model) View() string {
 
 	leftWidth, rightWidth := splitPaneWidths(m.width - 1) // -1 for horizontal gap
 
-	bodyHeight := m.height - 2 // -1 status bar, -1 bottom gap
+	bodyHeight := m.height - 1 // -1 status bar (no gap, body sits flush against it)
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
@@ -112,8 +112,7 @@ func (m Model) View() string {
 	statusBgSeq := bgANSISeq(statusStyle.GetBackground())
 	statusText = statusBgSeq + strings.ReplaceAll(statusText, "\x1b[0m", "\x1b[0m"+statusBgSeq) + "\x1b[0m"
 	status := statusStyle.Width(m.width).Render(statusText)
-	bottomGap := lipgloss.NewStyle().Width(m.width).Background(gapBG).Render("")
-	rendered := lipgloss.JoinVertical(lipgloss.Left, body, bottomGap, status)
+	rendered := lipgloss.JoinVertical(lipgloss.Left, body, status)
 
 	if m.width > 0 && m.height > 0 {
 		rendered = lipgloss.Place(
