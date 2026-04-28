@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"ide/internal/config"
@@ -230,4 +231,99 @@ func TestParseWindowSpec(t *testing.T) {
 			t.Errorf("expected error for whitespace-only spec")
 		}
 	})
+}
+
+// TestShortcutsListAmbiguousKeyResolvesByCursor sanity-checks that the
+// ambiguity targeted by updateShortcutsMode's cursor-first dispatch is real:
+// the help overlay has two rows keyed "a" — one for create-environment in the
+// Sessions section and one for create-template in the Templates section.
+// Without cursor-aware dispatch, pressing "a" while focused on the templates
+// row would still fire create-environment because the list scan returns the
+// first match.
+func TestShortcutsListAmbiguousKeyResolvesByCursor(t *testing.T) {
+	items := shortcutsList()
+	envIndex, tmplIndex := -1, -1
+	for i, it := range items {
+		if it.isHeader {
+			continue
+		}
+		if it.key == "a" && it.action == "create" {
+			envIndex = i
+		}
+		if it.key == "a" && it.action == "create-template" {
+			tmplIndex = i
+		}
+	}
+	if envIndex < 0 || tmplIndex < 0 {
+		t.Fatalf("expected both 'a' rows in shortcutsList; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
+	}
+	if tmplIndex <= envIndex {
+		t.Fatalf("expected templates 'a' row to come after env 'a' row; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
+	}
+}
+
+// TestShortcutsListTemplatesEnter ensures the Templates section advertises
+// "enter" as an alias for edit, matching the actual updateTemplatesPanelKey
+// behavior (case "e", "enter": startEditTemplateMode).
+func TestShortcutsListTemplatesEnter(t *testing.T) {
+	items := shortcutsList()
+	inTemplates := false
+	for _, it := range items {
+		if it.isHeader {
+			inTemplates = it.desc == "Templates"
+			continue
+		}
+		if !inTemplates {
+			continue
+		}
+		if it.desc == "edit template" {
+			for _, k := range strings.Split(it.key, "/") {
+				if k == "enter" {
+					return
+				}
+			}
+			t.Fatalf("templates 'edit template' row should advertise 'enter'; got key %q", it.key)
+		}
+	}
+	t.Fatalf("did not find templates 'edit template' row in shortcutsList")
+}
+
+// TestUpdatePathSuggestionsOnlySuggestsDirectories guards the rule that the
+// env "Root" field's autocomplete must surface directories only — files are
+// invalid roots and offering them is misleading.
+func TestUpdatePathSuggestionsOnlySuggestsDirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plain.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("writefile: %v", err)
+	}
+
+	m := &Model{}
+	ti := newTextInput("> ", "")
+	ti.SetValue(dir + "/")
+	m.updatePathSuggestions(&ti)
+
+	got := ti.AvailableSuggestions()
+	for _, s := range got {
+		if !strings.HasSuffix(s, "/") {
+			t.Errorf("suggestion %q should end with '/' (dirs only), but it does not", s)
+		}
+		base := filepath.Base(strings.TrimSuffix(s, "/"))
+		if base == "plain.txt" {
+			t.Errorf("plain.txt should not appear in suggestions: %v", got)
+		}
+	}
+	// Sanity: subdir is among the suggestions.
+	found := false
+	for _, s := range got {
+		if filepath.Base(strings.TrimSuffix(s, "/")) == "subdir" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected 'subdir' to be suggested, got %v", got)
+	}
 }

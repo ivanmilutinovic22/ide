@@ -317,6 +317,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if wl, err := tmux.ListWindows(session); err == nil {
 			m.sessionWindows[session] = wl
 		}
+		// The fuzzy cache snapshots `Running` per env; without this rebuild
+		// it would still report the freshly-started session as not-running
+		// until the next 500ms loadSessionsCmd tick.
+		m.rebuildFuzzyIndex()
 		return m.enterTerminalMode()
 
 	case previewTickMsg:
@@ -1125,6 +1129,11 @@ func (m *Model) updatePathSuggestions(ti *textinput.Model) {
 
 	var suggestions []string
 	for _, e := range entries {
+		// Root paths are directories. Skip plain files so the user isn't
+		// offered something they can't actually use as an env root.
+		if !isDirEntry(searchDir, e) {
+			continue
+		}
 		name := e.Name()
 		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
 			continue
@@ -1132,10 +1141,7 @@ func (m *Model) updatePathSuggestions(ti *textinput.Model) {
 		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), strings.ToLower(prefix)) {
 			continue
 		}
-		full := filepath.Join(searchDir, name)
-		if e.IsDir() {
-			full += "/"
-		}
+		full := filepath.Join(searchDir, name) + "/"
 		// Convert back to ~/... for display (must match the input prefix)
 		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(val, "~") && strings.HasPrefix(full, home) {
 			full = "~" + full[len(home):]
@@ -1144,6 +1150,22 @@ func (m *Model) updatePathSuggestions(ti *textinput.Model) {
 	}
 	sort.Strings(suggestions)
 	ti.SetSuggestions(suggestions)
+}
+
+// isDirEntry reports whether a directory entry resolves to a directory,
+// following symlinks so symlinked dirs (common in monorepos) still suggest.
+func isDirEntry(parent string, e os.DirEntry) bool {
+	if e.IsDir() {
+		return true
+	}
+	if e.Type()&os.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(parent, e.Name()))
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 func (m Model) resolveCreateWindows() ([]config.WindowTemplate, error) {
@@ -1271,13 +1293,26 @@ func (m Model) updateShortcutsMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	default:
-		// Try to match the pressed key to a shortcut and execute it
+		// Try to match the pressed key to a shortcut and execute it.
+		// Prefer the cursor's row first so duplicate keys (e.g. "a" appears
+		// for both create-environment and create-template) resolve to the
+		// section the user has navigated to.
 		pressed := msg.String()
-		for _, item := range shortcutsList() {
+		items := shortcutsList()
+		if m.shortcutCursor >= 0 && m.shortcutCursor < len(items) {
+			if cur := items[m.shortcutCursor]; !cur.isHeader && cur.action != "" {
+				for _, k := range strings.Split(cur.key, "/") {
+					if k == pressed {
+						m.showShortcuts = false
+						return m.executeShortcutAction(cur.action)
+					}
+				}
+			}
+		}
+		for _, item := range items {
 			if item.isHeader || item.action == "" {
 				continue
 			}
-			// Match against each key in the shortcut (e.g. "n/N" matches "n" or "N")
 			for _, k := range strings.Split(item.key, "/") {
 				if k == pressed {
 					m.showShortcuts = false
@@ -1362,7 +1397,7 @@ func shortcutsList() []shortcutItem {
 		{desc: "Templates", isHeader: true},
 		{"j/k", "select prev/next", false, ""},
 		{"a", "create template", false, "create-template"},
-		{"e", "edit template", false, ""},
+		{"e/enter", "edit template", false, ""},
 		{"d d", "delete template", false, ""},
 
 		{desc: "Search", isHeader: true},

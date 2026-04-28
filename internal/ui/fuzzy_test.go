@@ -3,6 +3,9 @@ package ui
 import (
 	"reflect"
 	"testing"
+
+	"ide/internal/config"
+	"ide/internal/tmux"
 )
 
 // TestFuzzyMatch verifies the byte-level subsequence match used by the
@@ -96,6 +99,119 @@ func TestMoveFuzzySearchCursorDoesNotLandOnHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRebuildFuzzyIndexAndCompute is an end-to-end test for the fuzzy
+// pipeline: rebuildFuzzyIndex populates m.fuzzySearchCache from the model's
+// environments + sessions + windowProcessInfo state, and
+// computeFuzzySearchResults filters that cache by the current query.
+//
+// This guards three behaviors that other handlers rely on:
+//  1. Empty query emits header + every window for every env.
+//  2. Query filters by env name, window name, and tag text.
+//  3. Cache reflects the m.sessions Running flag — including the in-place
+//     mutation done by terminalSessionReadyMsg, which adds a session to
+//     m.sessions and then calls rebuildFuzzyIndex without a round-trip
+//     through loadSessionsCmd.
+func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
+	envA := config.Environment{
+		Name: "alpha",
+		Windows: []config.WindowTemplate{
+			{Name: "shell"},
+			{Name: "agent", Tags: []string{"ai"}},
+		},
+	}
+	envB := config.Environment{
+		Name: "beta",
+		Windows: []config.WindowTemplate{
+			{Name: "shell"},
+		},
+	}
+
+	m := &Model{
+		environments:       []config.Environment{envA, envB},
+		sessions:           map[string]struct{}{},
+		sessionWindows:     map[string][]string{},
+		windowProcessInfo:  map[string]WindowProcessInfo{},
+		fuzzySearchQuery:   newTextInput("/ ", ""),
+	}
+	m.rebuildFuzzyIndex()
+
+	t.Run("empty query yields header plus every window per env", func(t *testing.T) {
+		m.fuzzySearchQuery.SetValue("")
+		results := m.computeFuzzySearchResults()
+		// envA: 1 header + 2 windows; envB: 1 header + 1 window = 5.
+		if len(results) != 5 {
+			t.Fatalf("expected 5 result rows, got %d: %+v", len(results), results)
+		}
+		if !results[0].IsHeader || results[0].EnvName != "alpha" {
+			t.Errorf("expected first row to be alpha header, got %+v", results[0])
+		}
+		if !results[3].IsHeader || results[3].EnvName != "beta" {
+			t.Errorf("expected fourth row to be beta header, got %+v", results[3])
+		}
+	})
+
+	t.Run("query filters by tag text", func(t *testing.T) {
+		m.fuzzySearchQuery.SetValue("ai")
+		results := m.computeFuzzySearchResults()
+		// Only envA's "agent" window has the [ai] tag, plus envA's header.
+		var windows []fuzzySearchItem
+		for _, r := range results {
+			if !r.IsHeader {
+				windows = append(windows, r)
+			}
+		}
+		if len(windows) != 1 || windows[0].WindowName != "agent" {
+			t.Errorf("expected only the [ai]-tagged window to match, got %+v", windows)
+		}
+	})
+
+	t.Run("query filters by env name", func(t *testing.T) {
+		m.fuzzySearchQuery.SetValue("beta")
+		results := m.computeFuzzySearchResults()
+		for _, r := range results {
+			if r.IsHeader && r.EnvName != "beta" {
+				t.Errorf("unexpected header in beta-filtered results: %+v", r)
+			}
+			if !r.IsHeader && r.EnvName != "beta" {
+				t.Errorf("unexpected window in beta-filtered results: %+v", r)
+			}
+		}
+	})
+
+	t.Run("Running flag follows m.sessions in-place mutation", func(t *testing.T) {
+		// Initially no sessions are running.
+		m.fuzzySearchQuery.SetValue("")
+		m.rebuildFuzzyIndex()
+		results := m.computeFuzzySearchResults()
+		for _, r := range results {
+			if r.Running {
+				t.Errorf("expected no row to be Running before session start, got %+v", r)
+			}
+		}
+
+		// Simulate terminalSessionReadyMsg: directly mark alpha's session as live
+		// and rebuild the index (matching what update.go now does).
+		m.sessions[tmux.SessionName(envA.Name)] = struct{}{}
+		m.rebuildFuzzyIndex()
+		results = m.computeFuzzySearchResults()
+		var alphaRunning, betaRunning bool
+		for _, r := range results {
+			if r.EnvName == "alpha" && r.Running {
+				alphaRunning = true
+			}
+			if r.EnvName == "beta" && r.Running {
+				betaRunning = true
+			}
+		}
+		if !alphaRunning {
+			t.Errorf("expected alpha rows to be Running after sessions mutation")
+		}
+		if betaRunning {
+			t.Errorf("expected beta rows NOT to be Running")
+		}
+	})
 }
 
 // TestExtractTags verifies the [tag] extraction helper. The function mutates

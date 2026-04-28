@@ -23,6 +23,7 @@ type searchItem struct {
 	tags    []string
 	running bool
 	header  bool
+	status  AgentStatus
 }
 
 // SearchModel is a standalone Bubble Tea model for the tmux popup search.
@@ -35,6 +36,7 @@ type SearchModel struct {
 	envs           []config.Environment
 	sessions       map[string]struct{}
 	sessionWindows map[string][]string
+	statuses       map[string]AgentStatus
 	theme          uiTheme
 }
 
@@ -48,6 +50,10 @@ type searchConfigLoadedMsg struct {
 	theme string
 }
 
+type searchStatusLoadedMsg struct {
+	statuses map[string]AgentStatus
+}
+
 func NewSearchModel() SearchModel {
 	ti := textinput.New()
 	ti.Prompt = "/ "
@@ -59,6 +65,7 @@ func NewSearchModel() SearchModel {
 		query:          ti,
 		sessions:       map[string]struct{}{},
 		sessionWindows: map[string][]string{},
+		statuses:       map[string]AgentStatus{},
 		theme:          themes[0],
 	}
 	return m
@@ -92,6 +99,50 @@ func (m SearchModel) loadSessions() tea.Cmd {
 	}
 }
 
+// loadStatuses fetches a one-shot agent status for every [ai]-tagged window
+// in a running session. The popup is short-lived, so we don't run hysteresis;
+// we derive a single sample heuristic per window:
+//   - state == "R"      → Cooking
+//   - CPU > 5.0         → Cooking
+//   - otherwise         → AwaitingInput (the agent CLI is alive in an [ai] pane)
+//
+// If GetPaneProcessInfo errors (no live session, etc.) the window is omitted
+// from the result map and renders as Idle (no suffix).
+func (m SearchModel) loadStatuses() tea.Cmd {
+	envs := m.envs
+	sessions := m.sessions
+	sessionWindows := m.sessionWindows
+	return func() tea.Msg {
+		out := map[string]AgentStatus{}
+		for _, env := range envs {
+			session := tmux.SessionName(env.Name)
+			if _, running := sessions[session]; !running {
+				continue
+			}
+			windows := tmux.WindowNames(env)
+			if sw, ok := sessionWindows[session]; ok && len(sw) > 0 {
+				windows = sw
+			}
+			for _, wName := range windows {
+				tmpl, ok := findWindowTemplate(env, wName)
+				if !ok || !HasTag(tmpl, "ai") {
+					continue
+				}
+				info, err := tmux.GetPaneProcessInfo(session, wName)
+				if err != nil {
+					continue
+				}
+				status := AgentStatusAwaitingInput
+				if info.State == "R" || info.CPU > 5.0 {
+					status = AgentStatusCooking
+				}
+				out[windowKey(session, wName)] = status
+			}
+		}
+		return searchStatusLoadedMsg{statuses: out}
+	}
+}
+
 func (m SearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -121,6 +172,12 @@ func (m SearchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for s, w := range msg.windows {
 			m.sessionWindows[s] = w
 		}
+		m.results = m.computeResults()
+		m.normalizeCursor()
+		return m, m.loadStatuses()
+
+	case searchStatusLoadedMsg:
+		m.statuses = msg.statuses
 		m.results = m.computeResults()
 		m.normalizeCursor()
 		return m, nil
@@ -199,8 +256,8 @@ func (m SearchModel) computeResults() []searchItem {
 		var matched []searchItem
 		for winIdx, wName := range windows {
 			var tags []string
-			if winIdx < len(env.Windows) {
-				tags = env.Windows[winIdx].Tags
+			if tmpl, ok := findWindowTemplate(env, wName); ok {
+				tags = tmpl.Tags
 			}
 
 			tagStr := ""
@@ -213,6 +270,12 @@ func (m SearchModel) computeResults() []searchItem {
 			}
 
 			if query == "" || fuzzyMatch(query, searchStr) {
+				status := AgentStatusIdle
+				if running && m.statuses != nil {
+					if s, ok := m.statuses[windowKey(session, wName)]; ok {
+						status = s
+					}
+				}
 				matched = append(matched, searchItem{
 					envIdx:  envIdx,
 					winIdx:  winIdx,
@@ -220,6 +283,7 @@ func (m SearchModel) computeResults() []searchItem {
 					window:  wName,
 					tags:    tags,
 					running: running,
+					status:  status,
 				})
 			}
 		}
@@ -364,16 +428,34 @@ func (m SearchModel) View() string {
 				continue
 			}
 
+			// Status indicator (rendered between window name and tags).
+			statusPlain := ""
+			statusStyled := ""
+			switch item.status {
+			case AgentStatusCooking:
+				statusPlain = " ● Cooking"
+				statusStyled = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#fbbf24")).
+					Bold(true).
+					Render(statusPlain)
+			case AgentStatusAwaitingInput:
+				statusPlain = " ◆ Awaiting"
+				statusStyled = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#22d3ee")).
+					Bold(true).
+					Render(statusPlain)
+			}
+
 			// Tags
 			tagStr := ""
 			for _, t := range item.tags {
 				tagStr += " " + tagStyle.Render("["+t+"]")
 			}
 
-			name := item.window + tagStr
+			name := item.window + statusStyled + tagStr
 
 			if i == m.cursor {
-				plain := item.window
+				plain := item.window + statusPlain
 				for _, t := range item.tags {
 					plain += " [" + t + "]"
 				}
