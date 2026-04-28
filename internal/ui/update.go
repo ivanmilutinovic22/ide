@@ -250,6 +250,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(m.windowProcessInfo, k)
 			}
 		}
+		// Cache the foreground command per window from the snapshot. This
+		// keeps captureCurrentWindowCmd off the tmux subprocess hot path —
+		// it can now read commands from windowProcessInfo instead of running
+		// tmux.CurrentProcess once per window per 500ms tick.
+		for session, byWindow := range msg.commands {
+			for w, cmd := range byWindow {
+				key := windowKey(session, w)
+				info := m.windowProcessInfo[key]
+				info.Command = cmd
+				m.windowProcessInfo[key] = info
+			}
+		}
 		m.rebuildFuzzyIndex()
 		// Ensure search keybinding is set for tmux popup
 		go func() {

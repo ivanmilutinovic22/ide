@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -23,9 +22,10 @@ type configLoadedMsg struct {
 }
 
 type sessionsLoadedMsg struct {
-	names   []string
-	windows map[string][]string
-	err     error
+	names    []string
+	windows  map[string][]string
+	commands map[string]map[string]string // session -> window -> foreground command
+	err      error
 }
 
 type attachReadyMsg struct {
@@ -127,40 +127,21 @@ func loadConfigCmd() tea.Cmd {
 
 func loadSessionsCmd() tea.Cmd {
 	return func() tea.Msg {
-		log.Printf("loadSessions: listing tmux sessions")
-		names, err := tmux.ListSessions()
+		// One batched `tmux list-panes -a` call gives us every session, every
+		// window, and every foreground pane command at once. Replaces the old
+		// list-sessions + N parallel list-windows fan-out and removes the need
+		// for per-window CurrentProcess calls in the polling path.
+		snap, err := tmux.ListSessionsSnapshot()
 		if err != nil {
-			log.Printf("loadSessions: ERROR listing sessions: %v", err)
+			log.Printf("loadSessions: ERROR snapshotting tmux: %v", err)
 			return sessionsLoadedMsg{err: err}
 		}
-		log.Printf("loadSessions: found %d sessions: %v", len(names), names)
-		windows := map[string][]string{}
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		var firstErr error
-		for _, name := range names {
-			wg.Add(1)
-			go func(name string) {
-				defer wg.Done()
-				ws, winErr := tmux.ListWindows(name)
-				mu.Lock()
-				defer mu.Unlock()
-				if winErr != nil {
-					log.Printf("loadSessions: ERROR listing windows for %q: %v", name, winErr)
-					if firstErr == nil {
-						firstErr = winErr
-					}
-					return
-				}
-				log.Printf("loadSessions: session %q has windows: %v", name, ws)
-				windows[name] = ws
-			}(name)
+		log.Printf("loadSessions: found %d sessions", len(snap.Names))
+		return sessionsLoadedMsg{
+			names:    snap.Names,
+			windows:  snap.Windows,
+			commands: snap.Commands,
 		}
-		wg.Wait()
-		if firstErr != nil {
-			return sessionsLoadedMsg{err: firstErr}
-		}
-		return sessionsLoadedMsg{names: names, windows: windows}
 	}
 }
 
@@ -498,7 +479,9 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 
 	// Check agent status for all AI windows across ALL running environments.
 	// Either the [ai] template tag or a known AI CLI as the foreground process
-	// makes a window eligible.
+	// makes a window eligible. The foreground command was captured by the
+	// previous loadSessionsCmd snapshot — read from the cache instead of
+	// spawning a tmux subprocess per window on every 500ms tick.
 	for _, e := range m.environments {
 		s := tmux.SessionName(e.Name)
 		if _, live := m.sessions[s]; !live {
@@ -506,13 +489,11 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 		}
 		ws := m.windowNamesForEnv(e)
 		for _, w := range ws {
+			cachedCmd := m.windowProcessInfo[windowKey(s, w)].Command
 			tmpl, hasTmpl := findWindowTemplate(e, w)
-			if hasTmpl && HasTag(tmpl, "ai") {
-				cmds = append(cmds, checkAgentStatusCmd(s, w))
-				continue
-			}
-			if isAIToolProcess(tmux.CurrentProcess(s, w)) {
-				cmds = append(cmds, checkAgentStatusCmd(s, w))
+			isAI := (hasTmpl && HasTag(tmpl, "ai")) || isAIToolProcess(cachedCmd)
+			if isAI {
+				cmds = append(cmds, checkAgentStatusCmd(s, w, cachedCmd))
 			}
 		}
 	}
@@ -534,8 +515,11 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// checkAgentStatusCmd creates a command to check agent status for a window
-func checkAgentStatusCmd(session, window string) tea.Cmd {
+// checkAgentStatusCmd creates a command to check agent status for a window.
+// The command (foreground process name) is supplied by the caller from the
+// cached snapshot rather than fetched here, to avoid an extra tmux subprocess
+// per window per tick.
+func checkAgentStatusCmd(session, window, command string) tea.Cmd {
 	return func() tea.Msg {
 		procInfo, err := tmux.GetPaneProcessInfo(session, window)
 		if err != nil {
@@ -550,7 +534,7 @@ func checkAgentStatusCmd(session, window string) tea.Cmd {
 				State:     procInfo.State,
 				Timestamp: time.Now(),
 			},
-			command: tmux.CurrentProcess(session, window),
+			command: command,
 		}
 	}
 }

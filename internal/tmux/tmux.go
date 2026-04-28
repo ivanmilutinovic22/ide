@@ -83,6 +83,53 @@ func ListWindows(session string) ([]string, error) {
 	return splitNonEmptyLines(out), nil
 }
 
+// SessionsSnapshot is the result of one batched `tmux list-panes -a` call:
+// every session, its windows, and the foreground command of each window's
+// first pane — all in a single tmux subprocess instead of one per session
+// plus one per window.
+type SessionsSnapshot struct {
+	Names    []string                       // session names, in tmux's default order
+	Windows  map[string][]string            // window names per session
+	Commands map[string]map[string]string   // session -> window -> first-pane command
+}
+
+// ListSessionsSnapshot fetches every session/window/pane-command in one shot.
+// Empty server (no tmux running) returns an empty snapshot with nil error.
+func ListSessionsSnapshot() (SessionsSnapshot, error) {
+	out, err := runTmux("list-panes", "-a", "-F", "#{session_name}\t#{window_name}\t#{pane_current_command}")
+	if err != nil {
+		return SessionsSnapshot{}, fmt.Errorf("list panes: %w", err)
+	}
+	snap := SessionsSnapshot{
+		Windows:  map[string][]string{},
+		Commands: map[string]map[string]string{},
+	}
+	seenSession := map[string]bool{}
+	seenWindow := map[string]map[string]bool{}
+	for _, line := range splitNonEmptyLines(out) {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		s, w, cmd := parts[0], parts[1], parts[2]
+		if !seenSession[s] {
+			seenSession[s] = true
+			snap.Names = append(snap.Names, s)
+			seenWindow[s] = map[string]bool{}
+			snap.Commands[s] = map[string]string{}
+		}
+		if !seenWindow[s][w] {
+			seenWindow[s][w] = true
+			snap.Windows[s] = append(snap.Windows[s], w)
+			// First pane of the window represents the window's foreground
+			// command, matching what `display-message #{pane_current_command}`
+			// returns for an unspecified pane target.
+			snap.Commands[s][w] = cmd
+		}
+	}
+	return snap, nil
+}
+
 func HasWindow(session, window string) (bool, error) {
 	window = SafeWindowName(window)
 	if window == "" {

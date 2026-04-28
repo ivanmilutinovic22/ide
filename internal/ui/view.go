@@ -637,7 +637,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		if sessionStatus == AgentStatusCooking {
 			indicator = " ● Cooking"
 		} else if sessionStatus == AgentStatusAwaitingInput {
-			indicator = " ◆ Awaiting Input"
+			indicator = " ◆ Awaiting"
 		}
 
 		plainLine := fmt.Sprintf("%s %-20s [%s]%s", num, env.Name, state, indicator)
