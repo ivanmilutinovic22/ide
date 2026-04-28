@@ -43,14 +43,18 @@ func (m *Model) rebuildFuzzyIndex() {
 		for winIdx, wName := range windows {
 			var status AgentStatus
 			var tags []string
-			if tmpl, ok := findWindowTemplate(env, wName); ok {
+			tmpl, hasTmpl := findWindowTemplate(env, wName)
+			if hasTmpl {
 				tags = tmpl.Tags
-				if HasTag(tmpl, "ai") {
-					key := windowKey(session, wName)
-					if info, ok := m.windowProcessInfo[key]; ok {
-						status = info.Status
-					}
-				}
+			}
+			key := windowKey(session, wName)
+			info, hasInfo := m.windowProcessInfo[key]
+			cachedCmd := ""
+			if hasInfo {
+				cachedCmd = info.Command
+			}
+			if m.isAIWindow(env, wName, cachedCmd) && hasInfo {
+				status = info.Status
 			}
 
 			tagStr := ""

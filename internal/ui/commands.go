@@ -92,6 +92,7 @@ type agentStatusUpdateMsg struct {
 	session  string
 	window   string
 	procInfo ProcessInfo
+	command  string
 }
 
 func loadConfigCmd() tea.Cmd {
@@ -495,7 +496,9 @@ func capturePaneCmd(session, window string) tea.Cmd {
 func (m Model) captureCurrentWindowCmd() tea.Cmd {
 	var cmds []tea.Cmd
 
-	// Check agent status for all AI windows across ALL running environments
+	// Check agent status for all AI windows across ALL running environments.
+	// Either the [ai] template tag or a known AI CLI as the foreground process
+	// makes a window eligible.
 	for _, e := range m.environments {
 		s := tmux.SessionName(e.Name)
 		if _, live := m.sessions[s]; !live {
@@ -503,7 +506,12 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 		}
 		ws := m.windowNamesForEnv(e)
 		for _, w := range ws {
-			if tmpl, ok := findWindowTemplate(e, w); ok && HasTag(tmpl, "ai") {
+			tmpl, hasTmpl := findWindowTemplate(e, w)
+			if hasTmpl && HasTag(tmpl, "ai") {
+				cmds = append(cmds, checkAgentStatusCmd(s, w))
+				continue
+			}
+			if isAIToolProcess(tmux.CurrentProcess(s, w)) {
 				cmds = append(cmds, checkAgentStatusCmd(s, w))
 			}
 		}
@@ -542,6 +550,7 @@ func checkAgentStatusCmd(session, window string) tea.Cmd {
 				State:     procInfo.State,
 				Timestamp: time.Now(),
 			},
+			command: tmux.CurrentProcess(session, window),
 		}
 	}
 }

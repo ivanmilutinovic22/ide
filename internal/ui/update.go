@@ -273,7 +273,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentStatusUpdateMsg:
 		log.Printf("[Update] Received agentStatusUpdateMsg for session=%s window=%s", msg.session, msg.window)
 		// Update the window process info based on the message
-		m.updateWindowProcessInfoFromMsg(msg.session, msg.window, msg.procInfo)
+		m.updateWindowProcessInfoFromMsg(msg.session, msg.window, msg.procInfo, msg.command)
 		m.rebuildFuzzyIndex()
 		// Refresh search results so status changes appear live
 		if m.showFuzzySearch {

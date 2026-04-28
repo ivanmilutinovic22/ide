@@ -3,11 +3,64 @@ package ui
 import (
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"ide/internal/config"
 	"ide/internal/tmux"
 )
+
+// aiToolNames is the set of process names recognised as known AI-agent CLIs.
+// Lookup is case-insensitive; values are stored lowercase and stripped of
+// any path or argument noise before comparison.
+var aiToolNames = map[string]struct{}{
+	"claude":       {}, // Anthropic Claude Code (npm @anthropic-ai/claude-code)
+	"opencode":     {}, // sst/opencode terminal AI agent
+	"codex":        {}, // openai/codex CLI
+	"aider":        {}, // Aider-AI/aider pair programmer
+	"gemini":       {}, // google-gemini/gemini-cli
+	"cursor-agent": {}, // Cursor CLI agent
+	"copilot":      {}, // github/copilot-cli (npm @github/copilot)
+	"crush":        {}, // charmbracelet/crush
+	"goose":        {}, // block/goose AI agent
+	"cn":           {}, // continuedev/continue CLI
+	"jules":        {}, // Google Jules Tools CLI
+	"mods":         {}, // charmbracelet/mods
+	"llm":          {}, // simonw/llm
+	"sgpt":         {}, // TheR1D/shell_gpt and tbckr/sgpt
+	"shell-gpt":    {}, // TheR1D/shell_gpt alias
+	"tgpt":         {}, // aandrew-me/tgpt
+	"chatgpt":      {}, // j178/chatgpt and similar interactive CLIs
+	"q":            {}, // Amazon Q Developer CLI (q chat)
+}
+
+// isAIToolProcess reports whether a foreground process name (e.g. the value
+// returned by `tmux.CurrentProcess`) belongs to a known AI-agent CLI.
+func isAIToolProcess(name string) bool {
+	if name == "" {
+		return false
+	}
+	// tmux returns just the binary name, but be defensive against paths/args.
+	name = strings.ToLower(strings.TrimSpace(name))
+	if i := strings.IndexAny(name, " \t"); i >= 0 {
+		name = name[:i]
+	}
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:]
+	}
+	_, ok := aiToolNames[name]
+	return ok
+}
+
+// isAIWindow reports whether the window should be tracked as an AI agent
+// window — either because the template has the [ai] tag or because its
+// current foreground process is a known AI CLI.
+func (m Model) isAIWindow(env config.Environment, windowName, currentProcess string) bool {
+	if tmpl, ok := findWindowTemplate(env, windowName); ok && HasTag(tmpl, "ai") {
+		return true
+	}
+	return isAIToolProcess(currentProcess)
+}
 
 // Agent status detection functions
 
@@ -114,7 +167,8 @@ func windowKey(session, window string) string {
 }
 
 // getWindowAgentStatus returns the current agent status for a window
-// Only returns non-idle status if window has [ai] tag
+// Only returns non-idle status if window has [ai] tag or its current
+// foreground process is a known AI CLI.
 func (m Model) getWindowAgentStatus(session, window string) AgentStatus {
 	log.Printf("[getWindowAgentStatus] session=%s window=%s", session, window)
 
@@ -124,33 +178,18 @@ func (m Model) getWindowAgentStatus(session, window string) AgentStatus {
 		return AgentStatusIdle
 	}
 
-	// Find the window template to check for [ai] tag
-	windowIdx := -1
-	windows := m.currentWindowNames()
-	log.Printf("[getWindowAgentStatus] env=%s windows=%v", env.Name, windows)
-	for i, w := range windows {
-		if w == window {
-			windowIdx = i
-			break
-		}
-	}
-
-	if windowIdx < 0 || windowIdx >= len(env.Windows) {
-		log.Printf("[getWindowAgentStatus] Window %s not found in config (idx=%d, len=%d), returning idle", window, windowIdx, len(env.Windows))
-		return AgentStatusIdle
-	}
-
-	// Check if window has [ai] tag
-	winTemplate := env.Windows[windowIdx]
-	hasAITag := HasTag(winTemplate, "ai")
-	log.Printf("[getWindowAgentStatus] Found window %s, tags=%v, has_ai=%v", window, winTemplate.Tags, hasAITag)
-	if !hasAITag {
-		return AgentStatusIdle
-	}
-
-	// Return tracked status
 	key := windowKey(session, window)
-	if info, ok := m.windowProcessInfo[key]; ok {
+	info, hasInfo := m.windowProcessInfo[key]
+	currentProcess := ""
+	if hasInfo {
+		currentProcess = info.Command
+	}
+
+	if !m.isAIWindow(env, window, currentProcess) {
+		return AgentStatusIdle
+	}
+
+	if hasInfo {
 		log.Printf("[getWindowAgentStatus] Returning tracked status: %s for key=%s", info.Status, key)
 		return info.Status
 	}
@@ -216,12 +255,16 @@ func (m Model) getSessionAgentStatus(env config.Environment) AgentStatus {
 	windows := m.windowNamesForEnv(env)
 	highest := AgentStatusIdle
 	for _, wName := range windows {
-		tmpl, ok := findWindowTemplate(env, wName)
-		if !ok || !HasTag(tmpl, "ai") {
+		key := windowKey(session, wName)
+		info, hasInfo := m.windowProcessInfo[key]
+		currentProcess := ""
+		if hasInfo {
+			currentProcess = info.Command
+		}
+		if !m.isAIWindow(env, wName, currentProcess) {
 			continue
 		}
-		key := windowKey(session, wName)
-		if info, ok := m.windowProcessInfo[key]; ok {
+		if hasInfo {
 			if info.Status == AgentStatusCooking {
 				return AgentStatusCooking
 			}
@@ -241,23 +284,8 @@ func (m *Model) updateWindowProcessInfo(session, window string) {
 		return
 	}
 
-	// Find the window template to check for [ai] tag
-	windowIdx := -1
-	windows := m.currentWindowNames()
-	for i, w := range windows {
-		if w == window {
-			windowIdx = i
-			break
-		}
-	}
-
-	if windowIdx < 0 || windowIdx >= len(env.Windows) {
-		return
-	}
-
-	// Only track if window has [ai] tag
-	winTemplate := env.Windows[windowIdx]
-	if !HasTag(winTemplate, "ai") {
+	currentCmd := tmux.CurrentProcess(session, window)
+	if !m.isAIWindow(env, window, currentCmd) {
 		return
 	}
 
@@ -308,12 +336,13 @@ func (m *Model) updateWindowProcessInfo(session, window string) {
 		LowActivityCount: newLowActivityCount,
 		BaselineCPU:      newBaselineCPU,
 		SampleCount:      newSampleCount,
+		Command:          currentCmd,
 	}
 }
 
 // updateWindowProcessInfoFromMsg updates the process info from an agentStatusUpdateMsg
 // This should be called from the Update method when receiving agentStatusUpdateMsg
-func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo ProcessInfo) {
+func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo ProcessInfo, command string) {
 	log.Printf("[updateWindowProcessInfoFromMsg] Processing msg for session=%s window=%s", session, window)
 
 	key := windowKey(session, window)
@@ -324,12 +353,14 @@ func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo 
 	var lowActivityCount int
 	var baselineCPU float64
 	var sampleCount int
+	previousCommand := ""
 	if existing, ok := m.windowProcessInfo[key]; ok {
 		previous = existing.Current
 		currentStatus = existing.Status
 		lowActivityCount = existing.LowActivityCount
 		baselineCPU = existing.BaselineCPU
 		sampleCount = existing.SampleCount
+		previousCommand = existing.Command
 	}
 
 	log.Printf("[updateWindowProcessInfoFromMsg] Current tracking: status=%s baseline=%.2f samples=%d",
@@ -342,6 +373,10 @@ func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo 
 
 	log.Printf("[updateWindowProcessInfoFromMsg] New status: %s baseline=%.2f", status, newBaselineCPU)
 
+	if command == "" {
+		command = previousCommand
+	}
+
 	// Update tracking
 	m.windowProcessInfo[key] = WindowProcessInfo{
 		Current:          procInfo,
@@ -350,6 +385,7 @@ func (m *Model) updateWindowProcessInfoFromMsg(session, window string, procInfo 
 		LowActivityCount: newLowActivityCount,
 		BaselineCPU:      newBaselineCPU,
 		SampleCount:      newSampleCount,
+		Command:          command,
 	}
 }
 

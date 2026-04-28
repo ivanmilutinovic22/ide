@@ -109,6 +109,7 @@ type WindowProcessInfo struct {
 	LowActivityCount int     // Consecutive samples with low activity
 	BaselineCPU      float64 // Average CPU when idle (awaiting_input)
 	SampleCount      int     // Number of samples taken for baseline
+	Command          string  // Most recently observed pane_current_command
 }
 
 // fuzzySearchItem represents a single item in the fuzzy search results.

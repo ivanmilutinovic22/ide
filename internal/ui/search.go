@@ -124,9 +124,12 @@ func (m SearchModel) loadStatuses() tea.Cmd {
 				windows = sw
 			}
 			for _, wName := range windows {
-				tmpl, ok := findWindowTemplate(env, wName)
-				if !ok || !HasTag(tmpl, "ai") {
-					continue
+				tmpl, hasTmpl := findWindowTemplate(env, wName)
+				hasAI := hasTmpl && HasTag(tmpl, "ai")
+				if !hasAI {
+					if !isAIToolProcess(tmux.CurrentProcess(session, wName)) {
+						continue
+					}
 				}
 				info, err := tmux.GetPaneProcessInfo(session, wName)
 				if err != nil {
