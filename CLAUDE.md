@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run
 
 ```bash
-go build ./cmd/ide    # Build binary
-go run ./cmd/ide      # Run without building
+go build .            # Build binary at ./ide
+go run .              # Run without building
 go fmt ./...          # Format code
 go vet ./...          # Static analysis
 go test ./...         # Run tests (none yet at MVP stage)
@@ -17,7 +17,9 @@ go test ./...         # Run tests (none yet at MVP stage)
 This is a TUI application using [Bubble Tea](https://github.com/charmbracelet/bubbletea) (Model-Update-View pattern) that manages tmux-based development environments.
 
 **Layer overview:**
-- `cmd/ide/main.go` — Entry point; creates `tea.Program` with `ui.NewModel()`
+- `main.go` — One-line entry point; calls `cmd/run.Dispatch()`
+- `cmd/run/run.go` — Argv dispatcher; chooses between `run.Main` and `run.Search`
+- `run/main.go` / `run/search.go` — Bubble Tea program runners (TUI vs search popup)
 - `internal/ui/model.go` — All TUI state, keyboard handling, and rendering (~2900 lines)
 - `internal/config/config.go` — JSON config persistence at `~/.config/ide/environments.json`
 - `internal/tmux/tmux.go` — Wrapper around tmux CLI commands

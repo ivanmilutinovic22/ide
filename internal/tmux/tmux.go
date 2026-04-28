@@ -23,80 +23,64 @@ func SessionName(envName string) string {
 	return "ide-" + clean
 }
 
-func HasSession(session string) bool {
-	cmd := exec.Command("tmux", "has-session", "-t", session)
+// runTmux runs tmux with the given args and returns stdout. Errors that mean
+// "nothing to report" — `no server running`, `can't find session` — are
+// translated to (empty, nil) so callers can treat them as a benign empty result.
+func runTmux(args ...string) (string, error) {
+	cmd := exec.Command("tmux", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return false
+		text := stderr.String()
+		if strings.Contains(text, "no server running") || strings.Contains(text, "can't find session") {
+			return "", nil
+		}
+		return "", err
 	}
-	return true
+	return stdout.String(), nil
+}
+
+func splitNonEmptyLines(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{}
+	}
+	raw := strings.Split(s, "\n")
+	out := make([]string, 0, len(raw))
+	for _, line := range raw {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func HasSession(session string) bool {
+	return exec.Command("tmux", "has-session", "-t", session).Run() == nil
 }
 
 func ListSessions() ([]string, error) {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	out, err := runTmux("list-sessions", "-F", "#{session_name}")
 	if err != nil {
-		if strings.Contains(stderr.String(), "no server running") {
-			return []string{}, nil
-		}
 		return nil, fmt.Errorf("list tmux sessions: %w", err)
 	}
-
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	res := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		res = append(res, line)
-	}
-	return res, nil
+	return splitNonEmptyLines(out), nil
 }
 
 func KillSession(session string) error {
-	cmd := exec.Command("tmux", "kill-session", "-t", session)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err != nil {
-		text := stderr.String()
-		if strings.Contains(text, "can't find session") || strings.Contains(text, "no server running") {
-			return nil
-		}
+	if _, err := runTmux("kill-session", "-t", session); err != nil {
 		return fmt.Errorf("kill tmux session %q: %w", session, err)
 	}
 	return nil
 }
 
 func ListWindows(session string) ([]string, error) {
-	cmd := exec.Command("tmux", "list-windows", "-t", session, "-F", "#{window_name}")
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-	err := cmd.Run()
+	out, err := runTmux("list-windows", "-t", session, "-F", "#{window_name}")
 	if err != nil {
-		text := stderr.String()
-		if strings.Contains(text, "can't find session") || strings.Contains(text, "no server running") {
-			return []string{}, nil
-		}
 		return nil, fmt.Errorf("list windows for %q: %w", session, err)
 	}
-
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	res := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		res = append(res, line)
-	}
-	return res, nil
+	return splitNonEmptyLines(out), nil
 }
 
 func HasWindow(session, window string) (bool, error) {
@@ -120,10 +104,6 @@ func EnsureSession(env config.Environment) error {
 	session := SessionName(env.Name)
 	log.Printf("EnsureSession: env=%q session=%q windows=%d", env.Name, session, len(env.Windows))
 
-	if HasSession(session) {
-		log.Printf("EnsureSession: session %q already exists, skipping", session)
-		return nil
-	}
 	if len(env.Windows) == 0 {
 		log.Printf("EnsureSession: no windows defined, falling back to default shell window")
 		env.Windows = []config.WindowTemplate{{Name: "shell"}}
@@ -141,8 +121,16 @@ func EnsureSession(env config.Environment) error {
 		args = append(args, firstCommand)
 	}
 	log.Printf("EnsureSession: creating session with first window %q cwd=%q cmd=%q args=%v", firstName, firstCwd, first.Cmd, args)
-	if err := exec.Command("tmux", args...).Run(); err != nil {
-		log.Printf("EnsureSession: ERROR creating session %q: %v", session, err)
+	cmd := exec.Command("tmux", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		// tmux reports "duplicate session: NAME" when the session already exists; treat as no-op so this is race-free vs. concurrent creators.
+		if strings.Contains(stderr.String(), "duplicate session") {
+			log.Printf("EnsureSession: session %q already exists, skipping", session)
+			return nil
+		}
+		log.Printf("EnsureSession: ERROR creating session %q: %v: %s", session, err, strings.TrimSpace(stderr.String()))
 		return fmt.Errorf("create tmux session %q: %w", session, err)
 	}
 	log.Printf("EnsureSession: session %q created", session)
@@ -244,24 +232,17 @@ func shellQuote(value string) string {
 
 func CurrentProcess(session, window string) string {
 	target := session + ":" + SafeWindowName(window)
-	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_current_command}")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
+	out, err := runTmux("display-message", "-p", "-t", target, "#{pane_current_command}")
+	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out.String())
+	return strings.TrimSpace(out)
 }
 
 func CapturePane(session, window string) (string, error) {
 	target := session + ":" + SafeWindowName(window)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-t", target)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return "", nil
-	}
-	return out.String(), nil
+	out, _ := runTmux("capture-pane", "-p", "-e", "-t", target)
+	return out, nil
 }
 
 func CheckTmuxExists() error {

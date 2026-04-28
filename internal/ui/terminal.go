@@ -33,16 +33,20 @@ const (
 
 // EmbeddedTerminal manages a PTY running tmux attach with a virtual terminal emulator.
 type EmbeddedTerminal struct {
-	mu      sync.Mutex
-	vt      vt10x.Terminal
-	ptmx    *os.File
-	cmd     *exec.Cmd
-	cols    int
-	rows    int
-	session string
-	window  string
-	closed  bool
+	mu       sync.Mutex
+	vt       vt10x.Terminal
+	ptmx     *os.File
+	cmd      *exec.Cmd
+	cols     int
+	rows     int
+	session  string
+	window   string
+	closed   bool
+	fgSGR    map[vt10x.Color]string
+	bgSGR    map[vt10x.Color]string
 }
+
+const sgrCacheCap = 4096
 
 // ptyReadMsg signals that new PTY output was processed into the virtual terminal.
 type ptyReadMsg struct{}
@@ -57,7 +61,12 @@ type terminalSessionReadyMsg struct {
 }
 
 func newEmbeddedTerminal(cols, rows int) *EmbeddedTerminal {
-	return &EmbeddedTerminal{cols: cols, rows: rows}
+	return &EmbeddedTerminal{
+		cols:  cols,
+		rows:  rows,
+		fgSGR: make(map[vt10x.Color]string),
+		bgSGR: make(map[vt10x.Color]string),
+	}
 }
 
 // Attach starts a PTY running tmux attach-session for the given target.
@@ -70,6 +79,12 @@ func (et *EmbeddedTerminal) Attach(session, window string) error {
 	et.session = session
 	et.window = window
 	et.closed = false
+	if et.fgSGR == nil {
+		et.fgSGR = make(map[vt10x.Color]string)
+	}
+	if et.bgSGR == nil {
+		et.bgSGR = make(map[vt10x.Color]string)
+	}
 
 	target := session + ":" + tmux.SafeWindowName(window)
 	cmd := exec.Command("tmux", "attach-session", "-t", target)
@@ -118,6 +133,7 @@ func (et *EmbeddedTerminal) Resize(cols, rows int) {
 }
 
 // Render converts the virtual terminal screen to an ANSI-styled string.
+// Includes cursor rendering as a reverse-video block at the cursor position.
 func (et *EmbeddedTerminal) Render(width, height int) string {
 	et.mu.Lock()
 	defer et.mu.Unlock()
@@ -134,32 +150,45 @@ func (et *EmbeddedTerminal) Render(width, height int) string {
 		rows = height
 	}
 
+	cur := et.vt.Cursor()
+	showCursor := et.vt.CursorVisible()
+
 	for row := 0; row < rows; row++ {
 		if row > 0 {
 			sb.WriteByte('\n')
 		}
 		var prevFG, prevBG vt10x.Color
 		var prevMode int16
+		prevIsCursor := false
 		needReset := false
 
 		for col := 0; col < cols; col++ {
 			g := et.vt.Cell(col, row)
+			isCursor := showCursor && col == cur.X && row == cur.Y
 
-			// Emit SGR if style changed
-			if col == 0 || g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode {
+			// Emit new SGR when style or cursor state changes
+			if col == 0 || g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode || isCursor != prevIsCursor {
 				if needReset {
 					sb.WriteString("\x1b[0m")
 				}
-				sgr := glyphSGR(g)
-				if sgr != "" {
-					sb.WriteString(sgr)
+				if isCursor {
+					sb.WriteString("\x1b[7m")
+					if sgr := et.glyphSGR(g); sgr != "" {
+						sb.WriteString(sgr)
+					}
 					needReset = true
 				} else {
-					needReset = false
+					if sgr := et.glyphSGR(g); sgr != "" {
+						sb.WriteString(sgr)
+						needReset = true
+					} else {
+						needReset = false
+					}
 				}
 				prevFG = g.FG
 				prevBG = g.BG
 				prevMode = g.Mode
+				prevIsCursor = isCursor
 			}
 
 			ch := g.Char
@@ -303,7 +332,7 @@ func (m Model) updateTerminalMode(key string) (tea.Model, tea.Cmd) {
 }
 
 // glyphSGR produces an ANSI SGR escape sequence for a vt10x glyph's style.
-func glyphSGR(g vt10x.Glyph) string {
+func (et *EmbeddedTerminal) glyphSGR(g vt10x.Glyph) string {
 	var params []string
 
 	if g.Mode&vtAttrBold != 0 {
@@ -322,10 +351,10 @@ func glyphSGR(g vt10x.Glyph) string {
 		params = append(params, "7")
 	}
 
-	if fg := colorSGR(g.FG, false); fg != "" {
+	if fg := et.cachedColorSGR(g.FG, false); fg != "" {
 		params = append(params, fg)
 	}
-	if bg := colorSGR(g.BG, true); bg != "" {
+	if bg := et.cachedColorSGR(g.BG, true); bg != "" {
 		params = append(params, bg)
 	}
 
@@ -333,6 +362,33 @@ func glyphSGR(g vt10x.Glyph) string {
 		return ""
 	}
 	return "\x1b[" + strings.Join(params, ";") + "m"
+}
+
+// cachedColorSGR returns the SGR fragment for a color, memoized per terminal.
+func (et *EmbeddedTerminal) cachedColorSGR(c vt10x.Color, bg bool) string {
+	cache := et.fgSGR
+	if bg {
+		cache = et.bgSGR
+	}
+	if cache != nil {
+		if s, ok := cache[c]; ok {
+			return s
+		}
+	}
+	s := colorSGR(c, bg)
+	if cache != nil {
+		if len(cache) >= sgrCacheCap {
+			if bg {
+				et.bgSGR = make(map[vt10x.Color]string)
+				cache = et.bgSGR
+			} else {
+				et.fgSGR = make(map[vt10x.Color]string)
+				cache = et.fgSGR
+			}
+		}
+		cache[c] = s
+	}
+	return s
 }
 
 // colorSGR converts a vt10x Color to SGR parameter string.
