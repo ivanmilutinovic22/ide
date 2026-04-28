@@ -146,6 +146,39 @@ func TestViewportSlice(t *testing.T) {
 	}
 }
 
+// TestSplitLeftPaneHeights verifies that the templates pane is sized to its
+// content (with a small slack) when there are few templates, while still
+// reserving room for the placeholder when the list is empty, and capping at
+// half the column when there are many templates.
+func TestSplitLeftPaneHeights(t *testing.T) {
+	tests := []struct {
+		name           string
+		total          int
+		templateCount  int
+		wantTop        int
+		wantBottom     int
+	}{
+		{"tiny total", 2, 5, 1, 1},
+		{"empty templates reserves placeholder room", 50, 0, 47, 3},
+		{"single template (matches the screenshot case)", 50, 1, 47, 3},
+		{"three templates", 50, 3, 45, 5},
+		{"many templates capped at half", 50, 30, 25, 25},
+		{"narrow column with empty templates", 8, 0, 5, 3},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			top, bottom := splitLeftPaneHeights(tc.total, tc.templateCount)
+			if top != tc.wantTop || bottom != tc.wantBottom {
+				t.Errorf("splitLeftPaneHeights(%d, %d) = (%d, %d), want (%d, %d)",
+					tc.total, tc.templateCount, top, bottom, tc.wantTop, tc.wantBottom)
+			}
+			if top+bottom != tc.total {
+				t.Errorf("top+bottom = %d, want %d", top+bottom, tc.total)
+			}
+		})
+	}
+}
+
 func splitLines(s string) []string {
 	var lines []string
 	start := 0

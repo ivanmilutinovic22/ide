@@ -36,7 +36,7 @@ func (m Model) View() string {
 	theme := m.currentTheme()
 	gapBG := lipgloss.Color(theme.AppBG)
 
-	topHeight, bottomHeight := splitLeftPaneHeights(leftContentTotal)
+	topHeight, bottomHeight := splitLeftPaneHeights(leftContentTotal, len(m.templates))
 	leftTopPane := m.renderEnvironmentPane(leftWidth, topHeight)
 	leftBottomPane := m.renderTemplatesPane(leftWidth, bottomHeight)
 	verticalGap := lipgloss.NewStyle().Width(leftWidth).Background(gapBG).Render("")
@@ -561,25 +561,38 @@ func backdropSegment(segment string) string {
 	return backdropStyle.Render(ansi.Strip(segment))
 }
 
-func splitLeftPaneHeights(total int) (int, int) {
+// splitLeftPaneHeights divides the left column between Sessions (top) and
+// Templates (bottom). Templates is content-driven: it claims only as much
+// height as it needs (title + rows + 1 row of slack), capped at half the
+// column so a long template list doesn't squeeze Sessions. Sessions takes
+// the rest.
+func splitLeftPaneHeights(total, templateCount int) (int, int) {
 	if total <= 2 {
 		return 1, 1
 	}
 
-	top := (total * 2) / 3
+	// Title + at least one row, even when the list is empty (so the
+	// "No templates" placeholder fits and the panel border still draws).
+	rows := templateCount
+	if rows < 1 {
+		rows = 1
+	}
+	desired := 1 + rows + 1 // title + rows + slack
+
+	cap := total / 2
+	if cap < 3 {
+		cap = 3
+	}
+	if desired > cap {
+		desired = cap
+	}
+
+	bottom := desired
+	top := total - bottom
 	if top < 1 {
 		top = 1
+		bottom = total - 1
 	}
-	if top > total-1 {
-		top = total - 1
-	}
-
-	bottom := total - top
-	if bottom < 1 {
-		bottom = 1
-		top = total - 1
-	}
-
 	return top, bottom
 }
 
