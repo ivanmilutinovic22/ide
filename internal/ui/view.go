@@ -288,8 +288,14 @@ func (m Model) shortcutHint(key, desc string) string {
 	return k + d
 }
 
+func (m Model) hintSeparator() string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.currentTheme().Muted)).
+		Render(" · ")
+}
+
 func (m Model) contextShortcutHints() string {
-	sep := "   "
+	sep := m.hintSeparator()
 
 	if m.showFuzzySearch {
 		return strings.Join([]string{
@@ -643,9 +649,9 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 					Foreground(lipgloss.Color(statusColor)).
 					Background(lipgloss.Color(theme.SelectedBG)).
 					Bold(true)
-				line = renderStyledPaneLine(selStyle, "> "+plainLine, contentWidth)
+				line = renderStyledPaneLine(selStyle, "▸ "+plainLine, contentWidth)
 			} else {
-				line = renderStyledPaneLine(selectedLineStyle, "> "+plainLine, contentWidth)
+				line = renderStyledPaneLine(selectedLineStyle, "▸ "+plainLine, contentWidth)
 			}
 		} else if running && sessionStatus != AgentStatusIdle {
 			statusColor := m.getWindowStatusColor(sessionStatus)
@@ -690,7 +696,7 @@ func (m Model) renderTemplatesPane(width, height int) string {
 		}
 		line := fmt.Sprintf("%s %-15s (%d windows)", num, tpl.Name, len(tpl.Windows))
 		if idx == m.selectedTemplate {
-			line = renderStyledPaneLine(selectedLineStyle, "> "+line, contentWidth)
+			line = renderStyledPaneLine(selectedLineStyle, "▸ "+line, contentWidth)
 		} else {
 			line = padLineToWidth("  "+line, contentWidth)
 		}
@@ -746,20 +752,29 @@ func (m Model) renderDetailsPane(width, height int) string {
 		}
 	}
 
-	infoLineStyle := lipgloss.NewStyle().
+	labelStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.Muted)).
-		Background(lipgloss.Color(theme.SelectedBG)).
-		ColorWhitespace(true)
+		Background(lipgloss.Color(theme.PaneBG))
+	valueStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.AppFG)).
+		Background(lipgloss.Color(theme.PaneBG))
+	infoLine := func(label, value string) string {
+		return renderStyledPaneLine(
+			lipgloss.NewStyle().Background(lipgloss.Color(theme.PaneBG)),
+			labelStyle.Render(label+" ")+valueStyle.Render(value),
+			contentWidth,
+		)
+	}
 
 	topRows := []string{tabsLine, ""}
 	if strings.TrimSpace(selectedWindowCwd) != "" {
-		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Cwd: %s", selectedWindowCwd), contentWidth))
+		topRows = append(topRows, infoLine("Cwd:", selectedWindowCwd))
 	}
 	if strings.TrimSpace(selectedWindowCmd) != "" {
-		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Cmd: %s", selectedWindowCmd), contentWidth))
+		topRows = append(topRows, infoLine("Cmd:", selectedWindowCmd))
 	}
 	if usingLiveWindows && m.previewSession == session && m.previewWindow == selectedWindowName && strings.TrimSpace(m.previewProcess) != "" {
-		topRows = append(topRows, renderStyledPaneLine(infoLineStyle, fmt.Sprintf("Running: %s", m.previewProcess), contentWidth))
+		topRows = append(topRows, infoLine("Running:", m.previewProcess))
 	}
 	topRows = append(topRows, "") // blank separator before preview
 
@@ -1007,7 +1022,7 @@ func (m Model) renderThemePickerPane(width, height int) string {
 			}
 			line := "  " + name
 			if listIdx == m.themePickerCursor {
-				line = renderStyledPaneLine(selectedLineStyle, "> "+name, contentWidth)
+				line = renderStyledPaneLine(selectedLineStyle, "▸ "+name, contentWidth)
 			} else {
 				line = padLineToWidth(line, contentWidth)
 			}
