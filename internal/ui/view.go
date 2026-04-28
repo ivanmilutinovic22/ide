@@ -353,11 +353,12 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("e", "edit"),
 		)
 	}
+	// Always available globals — kept short so the bar reads at a glance.
+	// Less common shortcuts (n next-ai, ctrl+t themes, q quit, r refresh)
+	// live in the `?` overlay rather than the always-visible bar.
 	hints = append(hints,
 		m.shortcutHint("tab", "panels"),
 		m.shortcutHint("ctrl+p", "search"),
-		m.shortcutHint("n", "next ai"),
-		m.shortcutHint("ctrl+t", "themes"),
 		m.shortcutHint("?", "help"),
 	)
 	return strings.Join(hints, sep)
@@ -568,20 +569,21 @@ func backdropSegment(segment string) string {
 }
 
 // splitLeftPaneHeights divides the left column between Sessions (top) and
-// Templates (bottom). Templates is content-driven: it claims only as much
-// height as it needs (title + rows + 1 row of slack), capped at half the
-// column so a long template list doesn't squeeze Sessions. Sessions takes
-// the rest.
+// Templates (bottom). Templates always reserves room for ~5 rows so adding
+// a few templates doesn't reflow the layout each time, but it never claims
+// more than half the column. Sessions takes the rest.
 func splitLeftPaneHeights(total, templateCount int) (int, int) {
 	if total <= 2 {
 		return 1, 1
 	}
 
-	// Title + at least one row, even when the list is empty (so the
-	// "No templates" placeholder fits and the panel border still draws).
+	// At least templatesMinVisible rows of body so the user always sees a
+	// few entries (or has room to scroll a longer list). Grow with content,
+	// shrink to half the column max.
+	const templatesMinVisible = 5
 	rows := templateCount
-	if rows < 1 {
-		rows = 1
+	if rows < templatesMinVisible {
+		rows = templatesMinVisible
 	}
 	desired := 1 + rows + 1 // title + rows + slack
 

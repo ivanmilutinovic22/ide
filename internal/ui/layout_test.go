@@ -159,11 +159,13 @@ func TestSplitLeftPaneHeights(t *testing.T) {
 		wantBottom     int
 	}{
 		{"tiny total", 2, 5, 1, 1},
-		{"empty templates reserves placeholder room", 50, 0, 47, 3},
-		{"single template (matches the screenshot case)", 50, 1, 47, 3},
-		{"three templates", 50, 3, 45, 5},
+		{"empty templates still reserves min visible (5)", 50, 0, 43, 7},
+		{"single template still reserves min visible (5)", 50, 1, 43, 7},
+		{"three templates still reserves min visible (5)", 50, 3, 43, 7},
+		{"five templates uses min row count", 50, 5, 43, 7},
+		{"more than min grows pane", 50, 8, 40, 10},
 		{"many templates capped at half", 50, 30, 25, 25},
-		{"narrow column with empty templates", 8, 0, 5, 3},
+		{"narrow column falls back to half", 8, 0, 4, 4},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
