@@ -631,7 +631,7 @@ func (m Model) renderDetailsPane(width, height int) string {
 
 	// Title changes based on terminal mode
 	if m.terminalMode {
-		title := panelTitle("w", "Terminal — Ctrl+] exit", true, theme)
+		title := panelTitle("w", "Terminal — Ctrl+q exit", true, theme)
 		if !ok {
 			body := strings.Join([]string{"", "No environment selected."}, "\n")
 			return renderPaneWithTitle(width, height, title, body, true)
