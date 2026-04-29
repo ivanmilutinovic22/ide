@@ -85,36 +85,13 @@ tmux -V    # should print 3.2 or higher
 
 The config file is plain JSON. You can edit it directly or use the UI.
 
-**Path:** `~/.config/ide/environments.json` (Linux/macOS — follows `os.UserConfigDir`).
+**Path** (follows `os.UserConfigDir`):
 
-```json
-{
-  "environments": [
-    {
-      "name": "api-gateway",
-      "root": "/Users/me/code/api-gateway",
-      "db_connection": "postgres://localhost/api_dev",
-      "windows": [
-        { "name": "editor", "cmd": "nvim ." },
-        { "name": "server", "cmd": "air", "cwd": "cmd/server" },
-        { "name": "db", "cmd": "psql $DATABASE_URL" },
-        { "name": "logs", "cmd": "tail -f logs/dev.log" }
-      ]
-    }
-  ],
-  "templates": [
-    {
-      "name": "go-service",
-      "windows": [
-        { "name": "editor", "cmd": "nvim ." },
-        { "name": "server", "cmd": "air" },
-        { "name": "test", "cmd": "watchexec -e go go test ./..." }
-      ]
-    }
-  ],
-  "theme": "Midnight"
-}
-```
+| Platform | Location                                            |
+| -------- | --------------------------------------------------- |
+| Linux    | `$XDG_CONFIG_HOME/ide/environments.json` (defaults to `~/.config/ide/environments.json`) |
+| macOS    | `~/Library/Application Support/ide/environments.json` |
+| Windows  | `%AppData%\ide\environments.json`                   |
 
 ## Keyboard reference
 
