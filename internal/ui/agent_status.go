@@ -12,7 +12,7 @@ import (
 
 // isAIToolProcess and windowKey are thin shims around the agentstatus
 // package so existing call sites in this package don't need to be rewritten.
-func isAIToolProcess(name string) bool      { return agentstatus.IsAITool(name) }
+func isAIToolProcess(name string) bool        { return agentstatus.IsAITool(name) }
 func windowKey(session, window string) string { return agentstatus.Key(session, window) }
 func detectAgentStatus(current ProcessInfo, currentStatus AgentStatus, lowActivityCount int, baselineCPU float64, sampleCount int) (AgentStatus, int, float64, int) {
 	return agentstatus.Detect(current, currentStatus, lowActivityCount, baselineCPU, sampleCount)

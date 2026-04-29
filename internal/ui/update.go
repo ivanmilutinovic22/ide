@@ -108,6 +108,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.templateMode {
 			return m.updateTemplateMode(msg)
 		}
+		if m.envEditMode {
+			return m.updateEnvEditMode(msg)
+		}
+		if m.extractMode {
+			return m.updateExtractMode(msg)
+		}
 
 		if key != "x" {
 			m.killConfirm = ""
@@ -115,6 +121,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key != "d" {
 			m.deleteConfirm = ""
 			m.templateDeleteConfirm = ""
+		}
+		if key != "r" {
+			m.restartConfirm = ""
 		}
 		if pane, ok := parsePaneShortcut(key); ok {
 			m.focusPane = pane
@@ -161,6 +170,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = focusedPaneStatus(m.focusPane)
 			return m, m.captureCurrentWindowCmd()
 		case "r":
+			if m.focusPane == focusPaneEnvironments {
+				return m.startRestartSession()
+			}
 			m.status = "Refreshing..."
 			return m, tea.Batch(loadConfigCmd(), loadSessionsCmd())
 		case "n":
@@ -426,6 +438,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, loadConfigCmd()
 
+	case envWindowsSavedMsg:
+		if msg.err != nil {
+			m.status = "Save failed: " + msg.err.Error()
+			return m, nil
+		}
+		m.envEditMode = false
+		m.envEditTarget = ""
+		m.envEditSpec.SetValue("")
+		m.envEditSpec.Blur()
+		m.pendingSelect = msg.envName
+		m.status = "Environment template updated: " + msg.envName + ". Press r to restart session."
+		return m, loadConfigCmd()
+
+	case sessionRestartedMsg:
+		if msg.err != nil {
+			m.status = "Restart failed: " + msg.err.Error()
+			return m, nil
+		}
+		if msg.sessionErr != nil {
+			m.status = "Session killed but recreate failed: " + msg.sessionErr.Error()
+			return m, loadSessionsCmd()
+		}
+		m.status = "Restarted session: " + msg.session
+		return m, loadSessionsCmd()
+
 	case templateDeletedMsg:
 		if msg.err != nil {
 			m.status = "Template delete failed: " + msg.err.Error()
@@ -459,7 +496,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Route unhandled messages (e.g. cursor blink ticks) to the focused textinput.
-	if m.createMode || m.templateMode || m.showThemePicker || m.showFuzzySearch {
+	if m.createMode || m.templateMode || m.envEditMode || m.extractMode || m.showThemePicker || m.showFuzzySearch {
 		var cmd tea.Cmd
 		if m.showFuzzySearch {
 			m.fuzzySearchQuery, cmd = m.fuzzySearchQuery.Update(msg)
@@ -481,6 +518,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case templateFieldWindows:
 				m.templateSpec, cmd = m.templateSpec.Update(msg)
 			}
+		} else if m.envEditMode {
+			m.envEditSpec, cmd = m.envEditSpec.Update(msg)
+		} else if m.extractMode {
+			m.extractName, cmd = m.extractName.Update(msg)
 		} else if m.showThemePicker {
 			m.themeQuery, cmd = m.themeQuery.Update(msg)
 		}
@@ -577,6 +618,10 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.focusCreateField()
 		m.status = "Create mode: enter environment name and root path."
 		return m, textinput.Blink
+	case "e":
+		return m.openEnvEditMode()
+	case "T":
+		return m.openExtractTemplateMode()
 	case "t":
 		m.status = "Switch to [3] Templates panel for template actions"
 		return m, nil
@@ -768,6 +813,127 @@ func (m Model) startMoveWindow(direction int) (tea.Model, tea.Cmd) {
 	windowName := windows[m.selectedWindow]
 	m.status = "Reordering window..."
 	return m, moveWindowOrderCmd(env.Name, windowName, direction)
+}
+
+func (m Model) openEnvEditMode() (tea.Model, tea.Cmd) {
+	env, ok := m.currentEnv()
+	if !ok {
+		m.status = "No environment selected."
+		return m, nil
+	}
+	m.envEditMode = true
+	m.createMode = false
+	m.templateMode = false
+	m.extractMode = false
+	m.envEditTarget = env.Name
+	m.envEditSpec.SetValue(formatWindowSpec(env.Windows))
+	m.envEditSpec.Focus()
+	m.status = "Edit environment template — Enter saves, Esc cancels."
+	return m, textinput.Blink
+}
+
+func (m Model) openExtractTemplateMode() (tea.Model, tea.Cmd) {
+	env, ok := m.currentEnv()
+	if !ok {
+		m.status = "No environment selected."
+		return m, nil
+	}
+	if len(env.Windows) == 0 {
+		m.status = "Selected environment has no windows to extract."
+		return m, nil
+	}
+	m.extractMode = true
+	m.createMode = false
+	m.templateMode = false
+	m.envEditMode = false
+	m.extractTarget = env.Name
+	m.extractName.SetValue(env.Name)
+	m.extractName.Focus()
+	m.status = "Save windows as template — name it, Enter to save, Esc cancels."
+	return m, textinput.Blink
+}
+
+func (m Model) updateEnvEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.envEditMode = false
+		m.envEditTarget = ""
+		m.envEditSpec.SetValue("")
+		m.envEditSpec.Blur()
+		m.status = "Edit canceled."
+		return m, nil
+	case "enter":
+		windows, err := parseWindowSpec(m.envEditSpec.Value())
+		if err != nil {
+			m.status = "Window spec error: " + err.Error()
+			return m, nil
+		}
+		target := m.envEditTarget
+		m.status = "Saving environment template..."
+		return m, saveEnvWindowsCmd(target, windows)
+	}
+	var cmd tea.Cmd
+	m.envEditSpec, cmd = m.envEditSpec.Update(msg)
+	return m, cmd
+}
+
+func (m Model) updateExtractMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.extractMode = false
+		m.extractTarget = ""
+		m.extractName.SetValue("")
+		m.extractName.Blur()
+		m.status = "Extract canceled."
+		return m, nil
+	case "enter":
+		name := strings.TrimSpace(m.extractName.Value())
+		if name == "" {
+			m.status = "Template name is required."
+			return m, nil
+		}
+		var windows []config.WindowTemplate
+		for _, e := range m.environments {
+			if strings.EqualFold(strings.TrimSpace(e.Name), m.extractTarget) {
+				windows = cloneWindowTemplates(e.Windows)
+				break
+			}
+		}
+		if len(windows) == 0 {
+			m.status = "Environment has no windows to extract."
+			return m, nil
+		}
+		m.status = "Saving template..."
+		return m, saveTemplateCmd("", name, windows)
+	}
+	var cmd tea.Cmd
+	m.extractName, cmd = m.extractName.Update(msg)
+	return m, cmd
+}
+
+func (m Model) startRestartSession() (tea.Model, tea.Cmd) {
+	env, ok := m.currentEnv()
+	if !ok {
+		m.status = "No environment selected."
+		return m, nil
+	}
+	name := strings.TrimSpace(env.Name)
+	if name == "" {
+		m.status = "Selected environment has empty name."
+		return m, nil
+	}
+	if m.restartConfirm != name {
+		m.restartConfirm = name
+		m.status = "Press r again to restart session for: " + name
+		return m, nil
+	}
+	m.restartConfirm = ""
+	m.status = "Restarting session..."
+	return m, restartSessionCmd(name)
 }
 
 func (m Model) startKillSession() (tea.Model, tea.Cmd) {
@@ -1375,6 +1541,12 @@ func (m Model) executeShortcutAction(action string) (tea.Model, tea.Cmd) {
 		m.templateField = templateFieldName
 		m.templateName.Focus()
 		m.status = "Create template."
+	case "edit-env":
+		m.focusPane = focusPaneEnvironments
+		return m.openEnvEditMode()
+	case "extract-template":
+		m.focusPane = focusPaneEnvironments
+		return m.openExtractTemplateMode()
 	}
 	return m, nil
 }
@@ -1397,6 +1569,9 @@ func shortcutsList() []shortcutItem {
 		{"j/k", "select prev/next", false, ""},
 		{"enter", "attach to session", false, ""},
 		{"a", "create environment", false, "create"},
+		{"e", "edit env template", false, "edit-env"},
+		{"r r", "restart session", false, ""},
+		{"T", "save windows as template", false, "extract-template"},
 		{"d d", "delete environment", false, ""},
 		{"x x", "kill session", false, ""},
 

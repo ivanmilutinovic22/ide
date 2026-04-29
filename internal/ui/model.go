@@ -86,6 +86,14 @@ const (
 	templateFieldWindows
 )
 
+const (
+	envEditFieldWindows = iota
+)
+
+const (
+	extractFieldName = iota
+)
+
 // AgentStatus, ProcessInfo, and WindowProcessInfo are re-exports of the
 // agentstatus package types so callers in this package can keep using the
 // shorter local names. The actual definitions and pure detection logic
@@ -159,6 +167,13 @@ type Model struct {
 	templateSpec          textinput.Model
 	templateEditing       bool
 	templateOrigin        string
+	envEditMode           bool
+	envEditTarget         string
+	envEditSpec           textinput.Model
+	extractMode           bool
+	extractTarget         string
+	extractName           textinput.Model
+	restartConfirm        string
 	showShortcuts         bool
 	shortcutCursor        int
 	showThemePicker       bool
@@ -212,6 +227,8 @@ func NewModel(terminalBG string) Model {
 	m.createCustom = newTextInput("Windows: ", "")
 	m.templateName = newTextInput("Name: ", "")
 	m.templateSpec = newTextInput("Windows: ", "")
+	m.envEditSpec = newTextInput("Windows: ", "")
+	m.extractName = newTextInput("Name: ", "")
 	m.themeQuery = newTextInput("", "")
 	m.fuzzySearchQuery = newTextInput("/ ", "Search sessions and windows...")
 	m.applyCurrentTheme()

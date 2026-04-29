@@ -33,17 +33,17 @@ const (
 
 // EmbeddedTerminal manages a PTY running tmux attach with a virtual terminal emulator.
 type EmbeddedTerminal struct {
-	mu       sync.Mutex
-	vt       vt10x.Terminal
-	ptmx     *os.File
-	cmd      *exec.Cmd
-	cols     int
-	rows     int
-	session  string
-	window   string
-	closed   bool
-	fgSGR    map[vt10x.Color]string
-	bgSGR    map[vt10x.Color]string
+	mu      sync.Mutex
+	vt      vt10x.Terminal
+	ptmx    *os.File
+	cmd     *exec.Cmd
+	cols    int
+	rows    int
+	session string
+	window  string
+	closed  bool
+	fgSGR   map[vt10x.Color]string
+	bgSGR   map[vt10x.Color]string
 }
 
 const sgrCacheCap = 4096

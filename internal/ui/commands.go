@@ -56,6 +56,18 @@ type templateSavedMsg struct {
 	err    error
 }
 
+type envWindowsSavedMsg struct {
+	envName string
+	err     error
+}
+
+type sessionRestartedMsg struct {
+	envName    string
+	session    string
+	sessionErr error
+	err        error
+}
+
 type templateDeletedMsg struct {
 	name string
 	err  error
@@ -267,6 +279,73 @@ func saveTemplateCmd(originalName, name string, windows []config.WindowTemplate)
 		}
 
 		return templateSavedMsg{name: name, edited: edited}
+	}
+}
+
+func saveEnvWindowsCmd(envName string, windows []config.WindowTemplate) tea.Cmd {
+	return func() tea.Msg {
+		envName = strings.TrimSpace(envName)
+		if envName == "" {
+			return envWindowsSavedMsg{err: fmt.Errorf("environment name is required")}
+		}
+		if len(windows) == 0 {
+			return envWindowsSavedMsg{envName: envName, err: fmt.Errorf("at least one window is required")}
+		}
+		data, err := config.LoadAll()
+		if err != nil {
+			return envWindowsSavedMsg{envName: envName, err: err}
+		}
+		idx := -1
+		for i := range data.Environments {
+			if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), envName) {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			return envWindowsSavedMsg{envName: envName, err: fmt.Errorf("environment %q not found", envName)}
+		}
+		data.Environments[idx].Windows = cloneWindowTemplates(windows)
+		if err := config.SaveAll(data); err != nil {
+			return envWindowsSavedMsg{envName: envName, err: err}
+		}
+		return envWindowsSavedMsg{envName: data.Environments[idx].Name}
+	}
+}
+
+func restartSessionCmd(envName string) tea.Cmd {
+	return func() tea.Msg {
+		envName = strings.TrimSpace(envName)
+		if envName == "" {
+			return sessionRestartedMsg{err: fmt.Errorf("environment name is required")}
+		}
+		envs, err := config.Load()
+		if err != nil {
+			return sessionRestartedMsg{envName: envName, err: err}
+		}
+		var env config.Environment
+		found := false
+		for i := range envs {
+			if strings.EqualFold(strings.TrimSpace(envs[i].Name), envName) {
+				env = envs[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return sessionRestartedMsg{envName: envName, err: fmt.Errorf("environment %q not found", envName)}
+		}
+		session := tmux.SessionName(env.Name)
+		if err := tmux.CheckTmuxExists(); err != nil {
+			return sessionRestartedMsg{envName: env.Name, session: session, err: err}
+		}
+		if tmux.HasSession(session) {
+			if err := tmux.KillSession(session); err != nil {
+				return sessionRestartedMsg{envName: env.Name, session: session, err: err}
+			}
+		}
+		sessionErr := tmux.EnsureSession(env)
+		return sessionRestartedMsg{envName: env.Name, session: session, sessionErr: sessionErr}
 	}
 }
 

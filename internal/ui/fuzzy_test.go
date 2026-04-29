@@ -76,7 +76,7 @@ func TestMoveFuzzySearchCursorDoesNotLandOnHeader(t *testing.T) {
 			direction: -1,
 		},
 		{
-			name:      "down from last window into a final header (no following window)",
+			name: "down from last window into a final header (no following window)",
 			// Not currently emitted by computeFuzzySearchResults, but the
 			// cursor mover should still cope.
 			results:   []fuzzySearchItem{header, window, header},
@@ -129,11 +129,11 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 	}
 
 	m := &Model{
-		environments:       []config.Environment{envA, envB},
-		sessions:           map[string]struct{}{},
-		sessionWindows:     map[string][]string{},
-		windowProcessInfo:  map[string]WindowProcessInfo{},
-		fuzzySearchQuery:   newTextInput("/ ", ""),
+		environments:      []config.Environment{envA, envB},
+		sessions:          map[string]struct{}{},
+		sessionWindows:    map[string][]string{},
+		windowProcessInfo: map[string]WindowProcessInfo{},
+		fuzzySearchQuery:  newTextInput("/ ", ""),
 	}
 	m.rebuildFuzzyIndex()
 

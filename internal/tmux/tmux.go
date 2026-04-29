@@ -88,9 +88,9 @@ func ListWindows(session string) ([]string, error) {
 // first pane — all in a single tmux subprocess instead of one per session
 // plus one per window.
 type SessionsSnapshot struct {
-	Names    []string                       // session names, in tmux's default order
-	Windows  map[string][]string            // window names per session
-	Commands map[string]map[string]string   // session -> window -> first-pane command
+	Names    []string                     // session names, in tmux's default order
+	Windows  map[string][]string          // window names per session
+	Commands map[string]map[string]string // session -> window -> first-pane command
 }
 
 // ListSessionsSnapshot fetches every session/window/pane-command in one shot.

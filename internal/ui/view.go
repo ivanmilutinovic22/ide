@@ -45,13 +45,20 @@ func (m Model) View() string {
 	rightPane := m.renderDetailsPane(rightWidth, rightPaneHeight)
 	horizontalGap := lipgloss.NewStyle().Width(1).Height(bodyHeight).Background(gapBG).Render("")
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, horizontalGap, rightPane)
-	if m.createMode || m.templateMode {
+	if m.createMode || m.templateMode || m.envEditMode || m.extractMode {
 		bodyWidth := lipgloss.Width(body)
 		bodyHeight := lipgloss.Height(body)
 		popupWidth, popupHeight := modalPopupDimensions(bodyWidth, bodyHeight, rightWidth, rightPaneHeight)
-		popup := m.renderCreatePane(popupWidth, popupHeight)
-		if m.templateMode {
+		var popup string
+		switch {
+		case m.envEditMode:
+			popup = m.renderEnvEditPane(popupWidth, popupHeight)
+		case m.extractMode:
+			popup = m.renderExtractPane(popupWidth, popupHeight)
+		case m.templateMode:
 			popup = m.renderTemplatePane(popupWidth, popupHeight)
+		default:
+			popup = m.renderCreatePane(popupWidth, popupHeight)
 		}
 		body = overlayCentered(body, popup)
 	}
@@ -267,6 +274,12 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("esc", "cancel"),
 		}, sep)
 	}
+	if m.envEditMode || m.extractMode {
+		return strings.Join([]string{
+			m.shortcutHint("enter", "save"),
+			m.shortcutHint("esc", "cancel"),
+		}, sep)
+	}
 	if m.terminalMode {
 		return strings.Join([]string{
 			m.shortcutHint("ctrl+q", "exit terminal"),
@@ -282,6 +295,9 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("j/k", "select"),
 			m.shortcutHint("enter", "attach"),
 			m.shortcutHint("a", "create"),
+			m.shortcutHint("e", "edit"),
+			m.shortcutHint("r", "restart"),
+			m.shortcutHint("T", "save tmpl"),
 			m.shortcutHint("d", "delete"),
 		)
 	case focusPaneWindows:
@@ -504,7 +520,7 @@ func splitLeftPaneHeights(total, templateCount int) (int, int) {
 
 func (m Model) renderEnvironmentPane(width, height int) string {
 	rows := make([]string, 0, len(m.environments)+1)
-	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneEnvironments
+	focused := !m.createMode && !m.templateMode && !m.envEditMode && !m.extractMode && m.focusPane == focusPaneEnvironments
 	theme := m.currentTheme()
 	title := panelTitle("s", "Sessions", focused, theme)
 	contentWidth := paneContentWidth(width)
@@ -577,7 +593,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 
 func (m Model) renderTemplatesPane(width, height int) string {
 	rows := make([]string, 0, len(m.templates)+2)
-	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneTemplates
+	focused := !m.createMode && !m.templateMode && !m.envEditMode && !m.extractMode && m.focusPane == focusPaneTemplates
 	theme := m.currentTheme()
 	title := panelTitle("t", "Templates", focused, theme)
 	contentWidth := paneContentWidth(width)
@@ -609,7 +625,7 @@ func (m Model) renderTemplatesPane(width, height int) string {
 }
 
 func (m Model) renderDetailsPane(width, height int) string {
-	focused := !m.createMode && !m.templateMode && m.focusPane == focusPaneWindows
+	focused := !m.createMode && !m.templateMode && !m.envEditMode && !m.extractMode && m.focusPane == focusPaneWindows
 	theme := m.currentTheme()
 	env, ok := m.currentEnv()
 
@@ -893,6 +909,43 @@ func (m Model) renderTemplatePane(width, height int) string {
 		modeName = "Edit Template"
 	}
 	return renderModalWithBorderTitle(width, height, modeName, strings.Join(rows, "\n"))
+}
+
+func (m Model) renderEnvEditPane(width, height int) string {
+	contentWidth := modalContentWidth(width)
+	inputW := contentWidth - lipgloss.Width(m.envEditSpec.Prompt) - 1
+	if inputW < 1 {
+		inputW = 1
+	}
+	m.envEditSpec.Width = inputW
+
+	rows := []string{
+		"Environment: " + m.envEditTarget,
+		m.envEditSpec.View(),
+		"",
+		"Window spec format: name=cmd;name2;name3=cmd|cwd",
+		"Enter saves; press r afterwards to restart the session",
+		"Esc cancels",
+	}
+	return renderModalWithBorderTitle(width, height, "Edit Environment Template", strings.Join(rows, "\n"))
+}
+
+func (m Model) renderExtractPane(width, height int) string {
+	contentWidth := modalContentWidth(width)
+	inputW := contentWidth - lipgloss.Width(m.extractName.Prompt) - 1
+	if inputW < 1 {
+		inputW = 1
+	}
+	m.extractName.Width = inputW
+
+	rows := []string{
+		"Save windows from: " + m.extractTarget,
+		m.extractName.View(),
+		"",
+		"Saves the environment's current window list as a new template.",
+		"Enter to save · Esc cancels",
+	}
+	return renderModalWithBorderTitle(width, height, "Save as Template", strings.Join(rows, "\n"))
 }
 
 func (m Model) renderThemePickerPane(width, height int) string {
