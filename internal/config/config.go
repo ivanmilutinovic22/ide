@@ -265,20 +265,11 @@ func normalizePath(value string) string {
 }
 
 func legacyDefaultWindows(dbConnection string) []WindowTemplate {
-	dbCmd := "dbdash"
-	if conn := strings.TrimSpace(dbConnection); conn != "" {
-		// Shell-quote the connection string so values containing characters
-		// meaningful to the shell (`;`, `$`, backticks, …) are passed as a
-		// single argv element to dbdash instead of being interpreted.
-		dbCmd = "dbdash connect " + shellQuote(conn)
-	}
-
 	return []WindowTemplate{
 		{Name: "editor", Cmd: "nvim ."},
 		{Name: "terminal"},
 		{Name: "lazygit", Cmd: "lazygit"},
-		{Name: "k9s", Cmd: "k9s -n te"},
-		{Name: "database", Cmd: dbCmd},
+		{Name: "ai-assistant [ai]", Cmd: "opencode"},
 	}
 }
 
