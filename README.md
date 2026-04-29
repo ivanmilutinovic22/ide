@@ -15,16 +15,58 @@ it, and showing you what's running across every project at a glance.
 
 ## Features
 
-- **One keystroke to attach** — pick a project, hit `enter`, you're in `tmux`.
+- **One keystroke and you're in** — pick a project, hit `enter`, you're working. No setup, no rehydrating context.
+- **Perfect for git worktrees** — spin up a dedicated environment per worktree (one for `main`, one for the feature
+  branch, one for the hotfix) and jump between them instantly. Each gets its own editor, server, logs — no more
+  `cd`-ing around or losing your place.
 - **Reproducible window layouts** — each environment lists its windows (`editor`, `logs`, `server`, …), each with its
   own startup command and working directory. Re-create the layout any time with `r r`.
-- **Live status across all projects** — see at a glance which sessions are running, what command is in the foreground of
-  each window, and whether an AI agent (Claude Code, etc.) is busy or idle in any pane.
+- **Live status across all projects** — see at a glance which sessions are running, what command is in the foreground
+  of each window, and whether an AI agent (Claude Code, etc.) is busy or idle in any pane.
 - **Templates** — save a window layout once and reuse it when creating new environments (`go-service`, `next-app`, …).
 - **Fuzzy search** — `Ctrl+P` opens a search across every window in every environment; `enter` jumps you straight there.
+  Once attached, `prefix + a` opens the same search from inside the session.
 - **Embedded preview** — the right pane shows a live capture of the selected window without leaving `ide`.
-- **In-tmux popup** — once attached, `prefix + a` opens the same fuzzy search inside `tmux` via `display-popup`.
 - **19 built-in themes**, switchable with `Ctrl+T`.
+
+---
+
+## Automated project setup
+
+You define an environment once — a root directory and a list of windows, each with its own command and
+working directory — and from then on, hitting `enter` brings the whole layout up. Anything that runs in
+a shell can be a window: editors, dev servers, build watchers, log tails, REPLs, agents, docker compose,
+port-forwards, you name it.
+
+A typical environment for a Go service might look like:
+
+```
+editor       nvim .
+server       air                              (cwd: cmd/server)
+test         watchexec -e go go test ./...
+db           psql $DATABASE_URL
+logs         tail -f logs/dev.log
+agent [ai]   claude
+```
+
+After a command exits the window stays open with an interactive shell, so a crash doesn't take the window
+with it. `r r` rebuilds the whole environment from scratch when you change the config or just want a
+fresh slate.
+
+---
+
+## AI agent support
+
+`ide` is built for the workflow where you have an AI coding agent running alongside your editor and server.
+Status (`cooking` / `awaiting input` / `idle`) is shown next to each AI window, and `n` / `N` cycles
+between them so you can hop to whichever agent finished first.
+
+**Two ways a window gets tracked as AI:**
+
+- **Tag it with `[ai]`** in the window name (e.g. `agent [ai]`). Use this when you launch the agent
+  yourself, or when the CLI you use isn't auto-detected.
+- **Automatic detection** when one of these CLIs is the foreground process: `claude`, `codex`, `aider`,
+  `cursor-agent`, `gemini`, `opencode`. No tag needed — start the agent and `ide` picks it up.
 
 ---
 
