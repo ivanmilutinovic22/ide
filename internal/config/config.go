@@ -72,7 +72,7 @@ func EnsureExists() error {
 	if err != nil {
 		return fmt.Errorf("marshal default config: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("write default config: %w", err)
 	}
 	return nil
@@ -181,7 +181,7 @@ func SaveAll(data Data) error {
 	if err != nil {
 		return fmt.Errorf("marshal config json: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
 	return nil
@@ -266,8 +266,11 @@ func normalizePath(value string) string {
 
 func legacyDefaultWindows(dbConnection string) []WindowTemplate {
 	dbCmd := "dbdash"
-	if strings.TrimSpace(dbConnection) != "" {
-		dbCmd = "dbdash connect " + strings.TrimSpace(dbConnection)
+	if conn := strings.TrimSpace(dbConnection); conn != "" {
+		// Shell-quote the connection string so values containing characters
+		// meaningful to the shell (`;`, `$`, backticks, …) are passed as a
+		// single argv element to dbdash instead of being interpreted.
+		dbCmd = "dbdash connect " + shellQuote(conn)
 	}
 
 	return []WindowTemplate{
@@ -277,4 +280,14 @@ func legacyDefaultWindows(dbConnection string) []WindowTemplate {
 		{Name: "k9s", Cmd: "k9s -n te"},
 		{Name: "database", Cmd: dbCmd},
 	}
+}
+
+// shellQuote wraps a value in single quotes so the shell treats it as a
+// single literal argument. Internal apostrophes are escaped using the
+// '"'"' idiom that works in any POSIX-compatible shell.
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
