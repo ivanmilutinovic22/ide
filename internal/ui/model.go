@@ -130,9 +130,16 @@ type fuzzyWinCacheEntry struct {
 }
 
 // fuzzyEnvCacheEntry groups precomputed search data per environment.
+//
+// envHaystack covers env-level search terms (env name + "running"/"up" when
+// the session is live). It's kept separate from each window's haystack so
+// the fuzzy match cannot span the env/window boundary — that produced
+// false positives like query "edit" matching env "update-windows-view"
+// window "term" via e..d..i..t scattered across both strings.
 type fuzzyEnvCacheEntry struct {
-	header  fuzzySearchItem
-	windows []fuzzyWinCacheEntry
+	header      fuzzySearchItem
+	envHaystack string
+	windows     []fuzzyWinCacheEntry
 }
 
 // uiTheme is an alias for theme.Theme so existing callers in this package

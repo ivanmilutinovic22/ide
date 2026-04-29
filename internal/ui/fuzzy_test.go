@@ -214,6 +214,99 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 	})
 }
 
+// TestFuzzySearchDoesNotSpanEnvWindowBoundary guards against a bug where
+// the query is allowed to fuzzy-match across the boundary between an env
+// name and a window name (or across two window names). The implementation
+// concatenates "<env> <window> <tags>" into one haystack per window, so a
+// subsequence match can grab a few characters from the env name and the
+// rest from the window name, producing matches that don't actually contain
+// the query in either field.
+//
+// Concrete repro: env "update-windows-view" with window "term", query
+// "edit". Joined haystack "update-windows-view term" fuzzy-matches "edit"
+// (e in updat**e**, d in win**d**ows, i in v**i**ew, t in **t**erm) even
+// though neither "update-windows-view" nor "term" contains "edit" as a
+// subsequence.
+func TestFuzzySearchDoesNotSpanEnvWindowBoundary(t *testing.T) {
+	platform := config.Environment{
+		Name: "platform-main",
+		Windows: []config.WindowTemplate{
+			{Name: "editor"},
+		},
+	}
+	updateView := config.Environment{
+		Name: "update-windows-view",
+		Windows: []config.WindowTemplate{
+			{Name: "term"},
+			{Name: "cc", Tags: []string{"ai"}},
+		},
+	}
+
+	m := &Model{
+		environments:      []config.Environment{platform, updateView},
+		sessions:          map[string]struct{}{},
+		sessionWindows:    map[string][]string{},
+		windowProcessInfo: map[string]WindowProcessInfo{},
+		fuzzySearchQuery:  newTextInput("/ ", ""),
+	}
+	m.rebuildFuzzyIndex()
+	m.fuzzySearchQuery.SetValue("edit")
+	results := m.computeFuzzySearchResults()
+
+	for _, r := range results {
+		if r.EnvName == "update-windows-view" {
+			t.Errorf("query %q should not match any row from %q, got %+v",
+				"edit", "update-windows-view", r)
+		}
+	}
+
+	var matched []string
+	for _, r := range results {
+		if !r.IsHeader {
+			matched = append(matched, r.EnvName+"/"+r.WindowName)
+		}
+	}
+	want := []string{"platform-main/editor"}
+	if !reflect.DeepEqual(matched, want) {
+		t.Errorf("matched windows: got %v, want %v", matched, want)
+	}
+}
+
+// TestFuzzySearchEnvNameMatchYieldsAllWindows confirms that when a query
+// matches the env name itself, every window of that env is included under
+// the header — the current behavior callers depend on.
+func TestFuzzySearchEnvNameMatchYieldsAllWindows(t *testing.T) {
+	env := config.Environment{
+		Name: "alpha",
+		Windows: []config.WindowTemplate{
+			{Name: "shell"},
+			{Name: "logs"},
+		},
+	}
+	m := &Model{
+		environments:      []config.Environment{env},
+		sessions:          map[string]struct{}{},
+		sessionWindows:    map[string][]string{},
+		windowProcessInfo: map[string]WindowProcessInfo{},
+		fuzzySearchQuery:  newTextInput("/ ", ""),
+	}
+	m.rebuildFuzzyIndex()
+	m.fuzzySearchQuery.SetValue("alpha")
+	results := m.computeFuzzySearchResults()
+
+	var windows []string
+	for _, r := range results {
+		if !r.IsHeader {
+			windows = append(windows, r.WindowName)
+		}
+	}
+	want := []string{"shell", "logs"}
+	if !reflect.DeepEqual(windows, want) {
+		t.Errorf("env-name match should include every window: got %v, want %v",
+			windows, want)
+	}
+}
+
 // TestExtractTags verifies the [tag] extraction helper. The function mutates
 // its argument in place to remove the tags and trim surrounding whitespace,
 // returning the captured tag list.

@@ -38,6 +38,11 @@ func (m *Model) rebuildFuzzyIndex() {
 		_, running := m.sessions[session]
 		sessionStatus := m.getSessionAgentStatus(env)
 
+		envHaystack := strings.ToLower(env.Name)
+		if running {
+			envHaystack += " running up"
+		}
+
 		windows := m.windowNamesForEnv(env)
 		winEntries := make([]fuzzyWinCacheEntry, 0, len(windows))
 		for winIdx, wName := range windows {
@@ -61,10 +66,7 @@ func (m *Model) rebuildFuzzyIndex() {
 			for _, t := range tags {
 				tagStr += " [" + t + "]"
 			}
-			searchStr := strings.ToLower(env.Name + " " + wName + tagStr)
-			if running {
-				searchStr += " running up"
-			}
+			searchStr := strings.ToLower(wName + tagStr)
 			switch status {
 			case AgentStatusCooking:
 				searchStr += " cooking"
@@ -95,7 +97,8 @@ func (m *Model) rebuildFuzzyIndex() {
 				Running:     running,
 				IsHeader:    true,
 			},
-			windows: winEntries,
+			envHaystack: envHaystack,
+			windows:     winEntries,
 		})
 	}
 	m.fuzzySearchCache = cache
@@ -106,9 +109,10 @@ func (m Model) computeFuzzySearchResults() []fuzzySearchItem {
 	var results []fuzzySearchItem
 
 	for _, entry := range m.fuzzySearchCache {
+		envMatches := query == "" || fuzzyMatch(query, entry.envHaystack)
 		var matchedWindows []fuzzySearchItem
 		for _, w := range entry.windows {
-			if query == "" || fuzzyMatch(query, w.haystack) {
+			if envMatches || fuzzyMatch(query, w.haystack) {
 				matchedWindows = append(matchedWindows, w.item)
 			}
 		}
