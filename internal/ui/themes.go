@@ -205,6 +205,13 @@ func (m Model) updateThemePickerMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "No theme matches the search query."
 			return m, nil
 		}
+		// Defensive bounds clamp: the cursor is normalized after every
+		// keypress in the default branch, but reclamping here protects
+		// against any future code path that mutates the filter without
+		// also normalizing the cursor.
+		if m.themePickerCursor < 0 || m.themePickerCursor >= len(indices) {
+			m.themePickerCursor = 0
+		}
 		selectedThemeIndex := indices[m.themePickerCursor]
 		m.themeIndex = selectedThemeIndex
 		m.applyCurrentTheme()

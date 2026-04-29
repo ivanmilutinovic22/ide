@@ -205,7 +205,7 @@ func (m Model) updateFuzzySearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveFuzzySearchCursor(1)
 		return m, nil
 	case "enter":
-		if m.fuzzySearchCursor < len(m.fuzzySearchResults) {
+		if m.fuzzySearchCursor >= 0 && m.fuzzySearchCursor < len(m.fuzzySearchResults) {
 			item := m.fuzzySearchResults[m.fuzzySearchCursor]
 			if item.IsHeader {
 				return m, nil
