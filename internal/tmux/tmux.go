@@ -210,10 +210,17 @@ func EnsureSession(env config.Environment) error {
 }
 
 // BindSearchKey sets up a tmux keybinding (prefix + a) that opens the IDE
-// search popup directly inside the tmux session using display-popup.
+// search popup directly inside the tmux session using display-popup. A
+// failure here is non-fatal — the rest of the session still works without
+// the popup binding — but log it so users have a breadcrumb.
 func BindSearchKey(ideBinary string) {
-	_ = exec.Command("tmux", "bind-key", "-T", "prefix", "a",
-		"display-popup", "-E", "-w", "80%", "-h", "80%", ideBinary, "--search").Run()
+	cmd := exec.Command("tmux", "bind-key", "-T", "prefix", "a",
+		"display-popup", "-E", "-w", "80%", "-h", "80%", ideBinary, "--search")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("BindSearchKey: failed to bind prefix+a: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
 }
 
 func AttachTarget(env config.Environment, windowName string) string {
@@ -288,14 +295,17 @@ func CurrentProcess(session, window string) string {
 
 func CapturePane(session, window string) (string, error) {
 	target := session + ":" + SafeWindowName(window)
-	out, _ := runTmux("capture-pane", "-p", "-e", "-t", target)
+	out, err := runTmux("capture-pane", "-p", "-e", "-t", target)
+	if err != nil {
+		return "", fmt.Errorf("capture pane %q: %w", target, err)
+	}
 	return out, nil
 }
 
 func CheckTmuxExists() error {
 	_, err := exec.LookPath("tmux")
 	if err != nil {
-		return errors.New("tmux is not installed or not in PATH")
+		return errors.New("tmux is not installed or not in PATH — install via `brew install tmux` (macOS) or `apt install tmux` (Debian/Ubuntu)")
 	}
 	return nil
 }
