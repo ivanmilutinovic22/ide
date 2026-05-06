@@ -786,7 +786,86 @@ func (m Model) renderWindowTabs(windows []string, session string, contentWidth i
 	sepStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.Muted))
-	tabsLine := strings.Join(tabs, sepStyle.Render(" - "))
+	sep := sepStyle.Render(" - ")
+	sepW := ansi.StringWidth(sep)
+
+	tabsLine := strings.Join(tabs, sep)
+	if ansi.StringWidth(tabsLine) <= contentWidth {
+		return tabsLine
+	}
+
+	// Overflow: build a sliding window around the selected tab and add
+	// "‹N" / "N›" markers for tabs hidden off either edge.
+	more := func(n int, prefix bool) string {
+		if n <= 0 {
+			return ""
+		}
+		if prefix {
+			return sepStyle.Render(fmt.Sprintf("‹%d ", n))
+		}
+		return sepStyle.Render(fmt.Sprintf(" %d›", n))
+	}
+
+	sel := m.selectedWindow
+	if sel < 0 || sel >= len(tabs) {
+		sel = 0
+	}
+	left, right := sel, sel
+	used := ansi.StringWidth(tabs[sel])
+	for {
+		canLeft := left > 0
+		canRight := right < len(tabs)-1
+		if !canLeft && !canRight {
+			break
+		}
+		// Reserve space for the hidden-count markers that would still be
+		// needed after this expansion step.
+		reserve := 0
+		if canLeft {
+			reserve += ansi.StringWidth(more(left, true))
+		}
+		if canRight {
+			reserve += ansi.StringWidth(more(len(tabs)-1-right, false))
+		}
+
+		// Prefer expanding right first so tab order reads left-to-right.
+		if canRight {
+			cost := sepW + ansi.StringWidth(tabs[right+1])
+			leftover := contentWidth - used - cost - reserve
+			// After adding the right tab, the right marker may shrink/disappear.
+			if right+1 == len(tabs)-1 {
+				leftover += ansi.StringWidth(more(len(tabs)-1-right, false))
+			}
+			if leftover >= 0 {
+				right++
+				used += cost
+				continue
+			}
+		}
+		if canLeft {
+			cost := sepW + ansi.StringWidth(tabs[left-1])
+			leftover := contentWidth - used - cost - reserve
+			if left-1 == 0 {
+				leftover += ansi.StringWidth(more(left, true))
+			}
+			if leftover >= 0 {
+				left--
+				used += cost
+				continue
+			}
+		}
+		break
+	}
+
+	parts := []string{}
+	if left > 0 {
+		parts = append(parts, more(left, true))
+	}
+	parts = append(parts, strings.Join(tabs[left:right+1], sep))
+	if right < len(tabs)-1 {
+		parts = append(parts, more(len(tabs)-1-right, false))
+	}
+	tabsLine = strings.Join(parts, "")
 	if ansi.StringWidth(tabsLine) > contentWidth {
 		tabsLine = ansi.Cut(tabsLine, 0, contentWidth)
 	}
