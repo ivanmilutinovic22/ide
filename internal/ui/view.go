@@ -62,6 +62,9 @@ func (m Model) View() string {
 		}
 		body = overlayCentered(body, popup)
 	}
+	if m.confirmMode {
+		body = overlayCentered(body, m.renderConfirmPane())
+	}
 	if m.showShortcuts || m.showThemePicker {
 		bodyWidth := lipgloss.Width(body)
 		bodyHeight := lipgloss.Height(body)
@@ -267,32 +270,28 @@ func (m Model) contextShortcutHints() string {
 			m.shortcutHint("esc", "close"),
 		}, sep)
 	}
-	if m.createMode || m.templateMode {
+	if m.confirmMode {
 		return strings.Join([]string{
-			m.shortcutHint("tab", "next field"),
-			m.shortcutHint("enter", "confirm"),
-			m.shortcutHint("esc", "cancel"),
+			m.shortcutHint("y", "confirm"),
+			m.shortcutHint("n", "cancel"),
 		}, sep)
 	}
-	if m.envEditMode || m.extractMode {
+	if m.createMode || m.templateMode || m.envEditMode || m.extractMode {
 		return strings.Join([]string{
 			m.shortcutHint("enter", "save"),
 			m.shortcutHint("esc", "cancel"),
 		}, sep)
 	}
 	if m.terminalMode {
-		return strings.Join([]string{
-			m.shortcutHint("ctrl+q", "exit terminal"),
-			m.shortcutHint("", "keys → tmux"),
-		}, sep)
+		return m.shortcutHint("ctrl+q", "exit terminal")
 	}
 
-	// Context-specific hints first, then global
+	// Only action keys go here — movement (j/k, h/l, tab) is omitted to
+	// keep the bar legible. Less common shortcuts live in the `?` overlay.
 	var hints []string
 	switch m.focusPane {
 	case focusPaneEnvironments:
 		hints = append(hints,
-			m.shortcutHint("j/k", "select"),
 			m.shortcutHint("enter", "attach"),
 			m.shortcutHint("a", "create"),
 			m.shortcutHint("e", "edit"),
@@ -302,23 +301,17 @@ func (m Model) contextShortcutHints() string {
 		)
 	case focusPaneWindows:
 		hints = append(hints,
-			m.shortcutHint("h/l", "select"),
 			m.shortcutHint("enter", "terminal"),
 			m.shortcutHint("H/L", "reorder"),
 		)
 	case focusPaneTemplates:
 		hints = append(hints,
-			m.shortcutHint("j/k", "select"),
 			m.shortcutHint("a", "create"),
 			m.shortcutHint("e", "edit"),
 			m.shortcutHint("d", "delete"),
 		)
 	}
-	// Always available globals — kept short so the bar reads at a glance.
-	// Less common shortcuts (n next-ai, ctrl+t themes, q quit, r refresh)
-	// live in the `?` overlay rather than the always-visible bar.
 	hints = append(hints,
-		m.shortcutHint("tab", "panels"),
 		m.shortcutHint("ctrl+p", "search"),
 		m.shortcutHint("?", "help"),
 	)
@@ -1025,6 +1018,19 @@ func (m Model) renderExtractPane(width, height int) string {
 		"Enter to save · Esc cancels",
 	}
 	return renderModalWithBorderTitle(width, height, "Save as Template", strings.Join(rows, "\n"))
+}
+
+func (m Model) renderConfirmPane() string {
+	prompt := m.confirmPrompt()
+	hint := "[y] confirm   [n] cancel"
+	innerW := lipgloss.Width(prompt)
+	if hw := lipgloss.Width(hint); hw > innerW {
+		innerW = hw
+	}
+	body := strings.Join([]string{prompt, "", hint}, "\n")
+	width := innerW + 6
+	height := 5
+	return renderModalWithBorderTitle(width, height, "Confirm", body)
 }
 
 func (m Model) renderThemePickerPane(width, height int) string {

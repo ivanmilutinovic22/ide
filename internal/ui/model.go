@@ -186,9 +186,9 @@ type Model struct {
 	showThemePicker       bool
 	themeQuery            textinput.Model
 	themePickerCursor     int
-	killConfirm           string
-	deleteConfirm         string
-	templateDeleteConfirm string
+	confirmMode           bool
+	confirmKind           string // "env_delete" | "session_kill" | "template_delete"
+	confirmTarget         string
 	pendingSelect         string
 	pendingTemplateSelect string
 	themes                []uiTheme

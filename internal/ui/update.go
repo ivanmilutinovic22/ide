@@ -102,6 +102,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateShortcutsMode(msg)
 		}
 
+		if m.confirmMode {
+			return m.updateConfirmMode(msg)
+		}
 		if m.createMode {
 			return m.updateCreateMode(msg)
 		}
@@ -115,13 +118,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateExtractMode(msg)
 		}
 
-		if key != "x" {
-			m.killConfirm = ""
-		}
-		if key != "d" {
-			m.deleteConfirm = ""
-			m.templateDeleteConfirm = ""
-		}
 		if key != "r" {
 			m.restartConfirm = ""
 		}
@@ -430,6 +426,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.templateSpec.SetValue("")
 		m.templateName.Blur()
 		m.templateSpec.Blur()
+		m.extractMode = false
+		m.extractTarget = ""
+		m.extractName.SetValue("")
+		m.extractName.Blur()
 		m.pendingTemplateSelect = msg.name
 		if msg.edited {
 			m.status = "Template updated: " + msg.name
@@ -468,7 +468,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Template delete failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.templateDeleteConfirm = ""
 		m.status = "Template deleted: " + msg.name
 		return m, loadConfigCmd()
 
@@ -478,7 +477,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = "Killed session: " + msg.session
-		m.killConfirm = ""
 		return m, loadSessionsCmd()
 
 	case environmentDeletedMsg:
@@ -486,7 +484,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Delete failed: " + msg.err.Error()
 			return m, nil
 		}
-		m.deleteConfirm = ""
 		if msg.killed {
 			m.status = "Deleted environment " + msg.environment + " and killed session " + msg.session
 		} else {
@@ -761,14 +758,11 @@ func (m Model) startDeleteTemplate() (tea.Model, tea.Cmd) {
 		m.status = "Selected template has empty name."
 		return m, nil
 	}
-	if m.templateDeleteConfirm != name {
-		m.templateDeleteConfirm = name
-		m.status = "Press d again to delete template: " + name
-		return m, nil
-	}
-	m.templateDeleteConfirm = ""
-	m.status = "Deleting template..."
-	return m, deleteTemplateCmd(name)
+	m.confirmMode = true
+	m.confirmKind = "template_delete"
+	m.confirmTarget = name
+	m.status = ""
+	return m, nil
 }
 
 func (m Model) startAttachSelected() (tea.Model, tea.Cmd) {
@@ -945,17 +939,13 @@ func (m Model) startKillSession() (tea.Model, tea.Cmd) {
 	session := tmux.SessionName(env.Name)
 	if _, running := m.sessions[session]; !running {
 		m.status = "Session is not running: " + session
-		m.killConfirm = ""
 		return m, nil
 	}
-	if m.killConfirm != session {
-		m.killConfirm = session
-		m.status = "Press x again to kill session: " + session
-		return m, nil
-	}
-	m.killConfirm = ""
-	m.status = "Killing session..."
-	return m, killSessionCmd(session)
+	m.confirmMode = true
+	m.confirmKind = "session_kill"
+	m.confirmTarget = session
+	m.status = ""
+	return m, nil
 }
 
 func (m Model) startDeleteEnvironment() (tea.Model, tea.Cmd) {
@@ -969,14 +959,53 @@ func (m Model) startDeleteEnvironment() (tea.Model, tea.Cmd) {
 		m.status = "Selected environment has empty name."
 		return m, nil
 	}
-	if m.deleteConfirm != name {
-		m.deleteConfirm = name
-		m.status = "Press d again to delete environment: " + name
+	m.confirmMode = true
+	m.confirmKind = "env_delete"
+	m.confirmTarget = name
+	m.status = ""
+	return m, nil
+}
+
+func (m Model) confirmPrompt() string {
+	switch m.confirmKind {
+	case "env_delete":
+		return "Delete environment " + m.confirmTarget + "?"
+	case "session_kill":
+		return "Kill tmux session " + m.confirmTarget + "?"
+	case "template_delete":
+		return "Delete template " + m.confirmTarget + "?"
+	}
+	return "Confirm?"
+}
+
+func (m Model) updateConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc", "n", "N":
+		m.confirmMode = false
+		m.confirmKind = ""
+		m.confirmTarget = ""
+		m.status = "Canceled."
+		return m, nil
+	case "y", "Y", "enter":
+		kind := m.confirmKind
+		target := m.confirmTarget
+		m.confirmMode = false
+		m.confirmKind = ""
+		m.confirmTarget = ""
+		switch kind {
+		case "env_delete":
+			m.status = "Deleting environment..."
+			return m, deleteEnvironmentCmd(target)
+		case "session_kill":
+			m.status = "Killing session..."
+			return m, killSessionCmd(target)
+		case "template_delete":
+			m.status = "Deleting template..."
+			return m, deleteTemplateCmd(target)
+		}
 		return m, nil
 	}
-	m.deleteConfirm = ""
-	m.status = "Deleting environment..."
-	return m, deleteEnvironmentCmd(name)
+	return m, nil
 }
 
 func (m *Model) normalizeCreateTemplate() {
