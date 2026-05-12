@@ -974,6 +974,8 @@ func (m Model) confirmPrompt() string {
 		return "Kill tmux session " + m.confirmTarget + "?"
 	case "template_delete":
 		return "Delete template " + m.confirmTarget + "?"
+	case "create_folder":
+		return "Path " + m.confirmTarget + " does not exist. Create folder?"
 	}
 	return "Confirm?"
 }
@@ -981,9 +983,19 @@ func (m Model) confirmPrompt() string {
 func (m Model) updateConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "esc", "n", "N":
+		kind := m.confirmKind
 		m.confirmMode = false
 		m.confirmKind = ""
 		m.confirmTarget = ""
+		if kind == "create_folder" {
+			m.pendingCreateName = ""
+			m.pendingCreateRoot = ""
+			m.pendingCreateWindows = nil
+			m.createField = createFieldRoot
+			m.focusCreateField()
+			m.status = "Canceled. Fix the root path or press Esc to abort."
+			return m, nil
+		}
 		m.status = "Canceled."
 		return m, nil
 	case "y", "Y", "enter":
@@ -1002,6 +1014,15 @@ func (m Model) updateConfirmMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "template_delete":
 			m.status = "Deleting template..."
 			return m, deleteTemplateCmd(target)
+		case "create_folder":
+			name := m.pendingCreateName
+			root := m.pendingCreateRoot
+			windows := m.pendingCreateWindows
+			m.pendingCreateName = ""
+			m.pendingCreateRoot = ""
+			m.pendingCreateWindows = nil
+			m.status = "Creating folder, environment and tmux session..."
+			return m, createFolderAndEnvironmentCmd(target, name, root, windows)
 		}
 		return m, nil
 	}
@@ -1284,6 +1305,19 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.focusCreateField()
 			}
 			return m, nil
+		}
+		normalized := normalizeRootPath(root)
+		if normalized != "" {
+			if _, err := os.Stat(normalized); os.IsNotExist(err) {
+				m.pendingCreateName = name
+				m.pendingCreateRoot = root
+				m.pendingCreateWindows = windows
+				m.confirmMode = true
+				m.confirmKind = "create_folder"
+				m.confirmTarget = normalized
+				m.status = ""
+				return m, nil
+			}
 		}
 		m.status = "Creating environment and tmux session..."
 		return m, createEnvironmentCmd(name, root, windows)

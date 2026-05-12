@@ -187,8 +187,11 @@ type Model struct {
 	themeQuery            textinput.Model
 	themePickerCursor     int
 	confirmMode           bool
-	confirmKind           string // "env_delete" | "session_kill" | "template_delete"
+	confirmKind           string // "env_delete" | "session_kill" | "template_delete" | "create_folder"
 	confirmTarget         string
+	pendingCreateName     string
+	pendingCreateRoot     string
+	pendingCreateWindows  []config.WindowTemplate
 	pendingSelect         string
 	pendingTemplateSelect string
 	themes                []uiTheme

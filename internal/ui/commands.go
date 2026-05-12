@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -165,6 +166,17 @@ func saveThemePreferenceCmd(theme string) tea.Cmd {
 		}
 		err := config.SaveTheme(theme)
 		return themePersistedMsg{name: theme, err: err}
+	}
+}
+
+func createFolderAndEnvironmentCmd(folderPath, name, root string, windows []config.WindowTemplate) tea.Cmd {
+	return func() tea.Msg {
+		log.Printf("createFolderAndEnvironment: mkdir %q", folderPath)
+		if err := os.MkdirAll(folderPath, 0o755); err != nil {
+			log.Printf("createFolderAndEnvironment: ERROR mkdir %q: %v", folderPath, err)
+			return environmentCreatedMsg{err: fmt.Errorf("create folder %q: %w", folderPath, err)}
+		}
+		return createEnvironmentCmd(name, root, windows)()
 	}
 }
 
