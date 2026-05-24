@@ -5,17 +5,21 @@
 package layout
 
 // SplitPaneWidths splits a horizontal width into a (left, right) pair.
-// Left pane is roughly 1/3 of total but clamped to [28, 44]; right pane
+// Left pane is roughly 1/4 of total but clamped to [28, 36]; right pane
 // gets the remainder, with a 28-col minimum that wins over the left clamp
 // when the screen is wide enough (>= 56). At very narrow widths each pane
 // is guaranteed at least 1 column.
+//
+// The left max is kept tight — sessions/agents/templates lists fit
+// comfortably in ~33 cols — so wide terminals give the preview/terminal
+// pane on the right as much room as possible.
 func SplitPaneWidths(total int) (int, int) {
-	leftWidth := total / 3
+	leftWidth := total / 4
 	if leftWidth < 28 {
 		leftWidth = 28
 	}
-	if leftWidth > 44 {
-		leftWidth = 44
+	if leftWidth > 36 {
+		leftWidth = 36
 	}
 
 	rightWidth := total - leftWidth
@@ -86,37 +90,58 @@ func PaneContentWidth(width int) int {
 	return contentWidth
 }
 
-// SplitLeftPaneHeights divides the left column between Sessions (top) and
-// Templates (bottom). Templates always reserves room for ~5 rows so adding
-// a few templates doesn't reflow the layout each time, but it never claims
-// more than half the column. Sessions takes the rest.
-func SplitLeftPaneHeights(total, templateCount int) (int, int) {
-	if total <= 2 {
-		return 1, 1
+// SplitLeftPaneHeights divides the left column into three stacked sections:
+// Sessions (top), Agents (middle), Templates (bottom). Agents and Templates
+// each reserve room for ~5 rows so a few entries don't reflow the layout,
+// but neither claims more than 1/3 of the column. Sessions takes the rest.
+func SplitLeftPaneHeights(total, agentCount, templateCount int) (sessions, agents, templates int) {
+	if total <= 3 {
+		return 1, 1, 1
 	}
 
-	const templatesMinVisible = 5
-	rows := templateCount
-	if rows < templatesMinVisible {
-		rows = templatesMinVisible
-	}
-	desired := 1 + rows + 1 // title + rows + slack
-
-	cap := total / 2
-	if cap < 3 {
-		cap = 3
-	}
-	if desired > cap {
-		desired = cap
+	const minVisible = 5
+	desire := func(count int) int {
+		rows := count
+		if rows < minVisible {
+			rows = minVisible
+		}
+		return 1 + rows + 1 // title + rows + slack
 	}
 
-	bottom := desired
-	top := total - bottom
-	if top < 1 {
-		top = 1
-		bottom = total - 1
+	sectionCap := total / 3
+	if sectionCap < 3 {
+		sectionCap = 3
 	}
-	return top, bottom
+
+	agents = desire(agentCount)
+	if agents > sectionCap {
+		agents = sectionCap
+	}
+	templates = desire(templateCount)
+	if templates > sectionCap {
+		templates = sectionCap
+	}
+
+	sessions = total - agents - templates
+	if sessions < 1 {
+		// Squeeze the bottom two so Sessions keeps at least one row.
+		excess := 1 - sessions
+		shrinkAgents := excess / 2
+		shrinkTemplates := excess - shrinkAgents
+		agents -= shrinkAgents
+		templates -= shrinkTemplates
+		if agents < 1 {
+			agents = 1
+		}
+		if templates < 1 {
+			templates = 1
+		}
+		sessions = total - agents - templates
+		if sessions < 1 {
+			sessions = 1
+		}
+	}
+	return sessions, agents, templates
 }
 
 // ViewportSlice returns the visible slice of rows for a scrollable list

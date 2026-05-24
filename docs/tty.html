@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ide — PTY &amp; embedded terminal</title>
+<style>
+  :root {
+    --base:      #eff1f5;
+    --mantle:    #e6e9ef;
+    --crust:     #dce0e8;
+    --text:      #4c4f69;
+    --subtext1:  #5c5f77;
+    --subtext0:  #6c6f85;
+    --overlay2:  #7c7f93;
+    --surface1:  #bcc0cc;
+    --surface0:  #ccd0da;
+    --pink:      #ea76cb;
+    --mauve:     #8839ef;
+    --red:       #d20f39;
+    --maroon:    #e64553;
+    --peach:     #fe640b;
+    --yellow:    #df8e1d;
+    --green:     #40a02b;
+    --teal:      #179299;
+    --sky:       #04a5e5;
+    --sapphire:  #209fb5;
+    --blue:      #1e66f5;
+    --lavender:  #7287fd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--base); color: var(--text); }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 32px 48px 64px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  h1 { font-weight: 600; font-size: 28px; margin: 0 0 6px; }
+  h2 { font-weight: 600; font-size: 20px; margin: 36px 0 10px; color: var(--mauve); border-bottom: 1px solid var(--surface0); padding-bottom: 6px; }
+  h3 { font-weight: 600; font-size: 15px; margin: 18px 0 6px; color: var(--blue); }
+  p, li { color: var(--subtext1); }
+  code, .mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 0.92em; background: var(--mantle); padding: 1px 5px; border-radius: 4px; }
+  pre {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .subtitle { color: var(--subtext0); margin-top: 0; }
+
+  .callout {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-left: 4px solid var(--teal);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.warn   { border-left-color: var(--peach); }
+  .callout.answer { border-left-color: var(--mauve); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; color: var(--text); font-weight: 600; }
+
+  /* Flow diagram */
+  .flow {
+    position: relative;
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 16px 0 28px;
+  }
+  .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .row {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 56px;
+  }
+  .row:last-child { margin-bottom: 0; }
+  .box {
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-left: 4px solid var(--blue);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+  }
+  .box .h { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 12px; font-weight: 600; color: var(--text); }
+  .box .d { font-size: 11.5px; color: var(--subtext1); margin-top: 4px; }
+  .box.input  { border-left-color: var(--green); }
+  .box.pty    { border-left-color: var(--peach); }
+  .box.shell  { border-left-color: var(--mauve); }
+  .box.vt     { border-left-color: var(--sapphire); }
+  .box.render { border-left-color: var(--red); }
+  .box.bubble { border-left-color: var(--blue); }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--surface0); vertical-align: top; }
+  th { color: var(--mauve); font-weight: 600; }
+  td.fn { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--maroon); white-space: nowrap; }
+  td.k  { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--blue); white-space: nowrap; }
+  ul { padding-left: 22px; }
+  ul li { margin: 4px 0; }
+
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+  }
+  .compare .col {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .compare .col.cur { border-left: 4px solid var(--peach); }
+  .compare .col.new { border-left: 4px solid var(--green); }
+  .compare .col h4 { margin: 0 0 6px; font-size: 14px; }
+</style>
+</head>
+<body>
+
+<h1>ide — PTY &amp; embedded terminal</h1>
+<p class="subtitle">How <code>internal/ui/terminal.go</code> opens a real terminal inside the TUI, where the bytes flow, and whether the same path could replace the polled <code>tmux capture-pane</code> preview.</p>
+
+<div class="callout answer">
+  <h4>The PTY package</h4>
+  <p style="margin:0">
+    <code>github.com/creack/pty</code> <strong>v1.1.24</strong> — the de-facto Go pty library, a thin wrapper around the OS's <code>posix_openpt</code> / <code>grantpt</code> / <code>unlockpt</code> dance. It gives us <code>pty.StartWithSize(cmd, *pty.Winsize)</code>, which forks the child onto a new pseudo-terminal master/slave pair and returns the master <code>*os.File</code> (<code>ptmx</code>). Companion library: <code>github.com/hinshun/vt10x</code> — a pure-Go xterm-ish virtual terminal that consumes the master's output and maintains an in-memory screen grid.
+  </p>
+</div>
+
+<h2>1 · What "attach to terminal" actually means here</h2>
+
+<p>
+  When you press <strong>Enter</strong> on a window row the TUI doesn't shell out and hand the terminal to <code>tmux attach</code> — that would unmount Bubble Tea and replace the screen. Instead, <code>ide</code> stays in control of the screen and runs <code>tmux attach-session</code> as a <em>child process</em> wired to a pseudo-terminal it created itself. Everything that child writes to its "screen" lands in our process as bytes we can read; everything you type gets fed back to it as bytes we write.
+</p>
+
+<p>
+  A pseudo-terminal (PTY) is two file descriptors that look like a real serial line to the kernel: the <strong>master</strong> end is ours, the <strong>slave</strong> end becomes the child's <code>stdin</code> / <code>stdout</code> / <code>stderr</code> and <code>controlling tty</code>. That's why programs running inside it — bash, vim, htop, claude, tmux — behave exactly as if you had launched a real terminal: <code>isatty()</code> returns true, <code>tput cols</code> works, <code>SIGWINCH</code> fires on resize, and ANSI escapes come back correctly.
+</p>
+
+<h2>2 · The byte path, top to bottom</h2>
+
+<div class="flow">
+  <svg viewBox="0 0 1200 420" preserveAspectRatio="none">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+    </defs>
+    <!-- output flow (downward) -->
+    <path d="M 130,68  L 130,118" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    <path d="M 130,178 L 130,228" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    <path d="M 130,288 L 130,338" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#ar)"/>
+    <!-- input flow (upward, dashed) -->
+    <path d="M 1070,338 L 1070,288" stroke="#7c7f93" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+    <path d="M 1070,228 L 1070,178" stroke="#7c7f93" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+    <path d="M 1070,118 L 1070,68"  stroke="#7c7f93" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+  </svg>
+
+  <div class="row">
+    <div class="box shell">
+      <div class="h">tmux attach-session</div>
+      <div class="d">Child process on the PTY slave. Writes ANSI to its "screen", reads keypresses from its stdin.</div>
+    </div>
+    <div></div><div></div><div></div>
+    <div class="box input">
+      <div class="h">user keystrokes</div>
+      <div class="d">Bubble Tea <code>tea.KeyMsg</code> in the host TUI.</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="box pty">
+      <div class="h">PTY master (ptmx)</div>
+      <div class="d"><code>creack/pty.StartWithSize</code> returned this <code>*os.File</code>. Read = child's stdout. Write = child's stdin.</div>
+    </div>
+    <div></div><div></div><div></div>
+    <div class="box bubble">
+      <div class="h">keyToBytes(key)</div>
+      <div class="d">Maps bubbletea key names → raw bytes: <code>"enter"→\r</code>, <code>"ctrl+a"→0x01</code>, arrows → CSI sequences, <code>"alt+x"→ESC x</code>.</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="box vt">
+      <div class="h">vt10x.Terminal</div>
+      <div class="d">In-memory screen grid. <code>vt.Write(buf)</code> parses ANSI, updates cells with FG/BG/attrs, moves cursor.</div>
+    </div>
+    <div></div><div></div><div></div>
+    <div class="box pty">
+      <div class="h">ptmx.Write(data)</div>
+      <div class="d">Bytes go straight to the child's stdin via the PTY master.</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="box render">
+      <div class="h">EmbeddedTerminal.Render</div>
+      <div class="d">Walks cells, emits SGR runs (cached per color), returns an ANSI string Bubble Tea draws as the right pane.</div>
+    </div>
+    <div></div><div></div><div></div>
+    <div class="box render">
+      <div class="h">updateTerminalMode</div>
+      <div class="d">Catches <code>ctrl+q</code> as the local "exit" escape; everything else is forwarded.</div>
+    </div>
+  </div>
+</div>
+
+<p style="font-size:12px;color:var(--subtext0);margin-top:-12px">
+  Solid arrows = data flowing <em>out</em> of the child into our screen. Dashed arrows = keystrokes flowing <em>in</em> from the host TUI to the child.
+</p>
+
+<h2>3 · The pieces, mapped to code</h2>
+
+<table>
+  <tr><th>Step</th><th>Code</th><th>What happens</th></tr>
+  <tr>
+    <td>Make a virtual screen</td>
+    <td class="fn">vt10x.New(WithSize(cols,rows))</td>
+    <td>In-memory cell grid sized to the right pane. No real fd yet.</td>
+  </tr>
+  <tr>
+    <td>Open PTY + fork child</td>
+    <td class="fn">pty.StartWithSize(cmd, &amp;Winsize{…})</td>
+    <td>Allocates master/slave, dups slave onto child's stdio, sets it as controlling tty, returns the master <code>*os.File</code> (<code>ptmx</code>). One call instead of the 6 syscalls you'd otherwise write.</td>
+  </tr>
+  <tr>
+    <td>Inform the child of size</td>
+    <td class="fn">pty.Setsize(ptmx, &amp;Winsize{…})</td>
+    <td>Used by <code>Resize</code>. Triggers <code>SIGWINCH</code> in the child so tmux, vim, etc. redraw at the new dimensions.</td>
+  </tr>
+  <tr>
+    <td>Drain output → screen</td>
+    <td class="fn">readPTYCmd(et)</td>
+    <td>A <code>tea.Cmd</code> that blocks on <code>ptmx.Read</code>, feeds bytes to <code>vt.Write</code>, returns <code>ptyReadMsg{}</code>. Re-issued from <code>Update</code> on every msg → continuous loop.</td>
+  </tr>
+  <tr>
+    <td>Render screen → ANSI</td>
+    <td class="fn">EmbeddedTerminal.Render</td>
+    <td>Walks the visible grid, batches SGR escapes only when style changes, paints the cursor as <code>\x1b[7m</code> (reverse). Per-color SGR strings are memoized in <code>fgSGR</code>/<code>bgSGR</code> (capped at 4096 entries).</td>
+  </tr>
+  <tr>
+    <td>Forward keystrokes</td>
+    <td class="fn">WriteInput(keyToBytes(key))</td>
+    <td><code>keyToBytes</code> maps Bubble Tea's key names back into the raw bytes a terminal would actually send (CSI for arrows, single byte for ctrl+letter, ESC-prefix for alt+letter).</td>
+  </tr>
+  <tr>
+    <td>Tear down</td>
+    <td class="fn">EmbeddedTerminal.Close</td>
+    <td>Closes <code>ptmx</code> (child gets EOF on stdin), kills + waits the child process. Idempotent via <code>closed</code> flag.</td>
+  </tr>
+</table>
+
+<h2>4 · Why we run tmux <em>inside</em> the PTY instead of bash directly</h2>
+
+<p>
+  The child we exec is <code>tmux attach-session -t ide-&lt;env&gt;:&lt;window&gt;</code>, not the window's actual command. That keeps two big invariants:
+</p>
+<ul>
+  <li>The <strong>tmux server is still the source of truth</strong> for what's running — if you detach from <code>ide</code>, the session keeps living, and external <code>tmux a -t ide-prod</code> still works.</li>
+  <li>Window state (scrollback, copy-mode, multiple panes) is preserved across attach/detach cycles. The vt10x emulator just paints whatever tmux happens to draw — it doesn't have to understand pane splits.</li>
+</ul>
+
+<h2>5 · Could we use the same PTY path for the right-pane preview?</h2>
+
+<p>
+  Right now the preview is the polled path: <code>capturePaneCmd</code> in <code>internal/ui/commands.go</code> shells out to <code>tmux capture-pane -p -e -t target</code> on a tick, stores the result as <code>m.previewContent</code>, and <code>renderPreviewRows</code> in <code>view.go</code> slices the last N lines for display.
+</p>
+
+<div class="compare">
+  <div class="col cur">
+    <h4>Current: <code>tmux capture-pane</code> polling</h4>
+    <ul>
+      <li>Snapshot of the screen at the moment tmux's renderer last wrote to the pane.</li>
+      <li>One <code>tmux</code> fork per tick per selected window.</li>
+      <li>Inherits whatever tmux decided about wrapping, colors, cursor — including <em>tmux's</em> reflow if the pane width differs from ours.</li>
+      <li>No cursor; <code>-e</code> gives ANSI but only the visible region, no live cursor.</li>
+      <li>Trivially correct for SSH, attaching from another machine, mosh, etc. — tmux already handles it.</li>
+      <li>Idle CPU = wake up, fork, read, parse, render.</li>
+    </ul>
+  </div>
+  <div class="col new">
+    <h4>Proposed: PTY-driven preview</h4>
+    <ul>
+      <li>Reuse <code>EmbeddedTerminal</code> in a "passive" mode: open a PTY running <code>tmux attach -r</code> (read-only) for the selected window, but never <code>WriteInput</code>.</li>
+      <li>Output is processed by vt10x continuously, so the preview matches what's <em>actually</em> on screen byte-for-byte at this exact moment, cursor included.</li>
+      <li>No per-tick forks — one persistent process per selected window, fed by a single goroutine read loop.</li>
+      <li>Reflow happens in <em>our</em> vt10x instance at <em>our</em> pane width; we control the geometry instead of inheriting tmux's.</li>
+      <li>Switching the selection means tearing down one attach + starting another. The cost of "show me window X" is the attach handshake, not a one-shot capture.</li>
+    </ul>
+  </div>
+</div>
+
+<h3>5.1 · Where it would actually be more precise</h3>
+<ul>
+  <li><strong>Cursor visibility</strong> — <code>capture-pane</code> doesn't tell you where the cursor is. The PTY path already paints it (we do this in terminal-mode today).</li>
+  <li><strong>Live frame for animations</strong> — progress bars, spinners, <code>htop</code>: <code>capture-pane</code> shows whatever frame tmux happened to be on at poll time, with no guarantee we caught the latest one. A persistent reader sees every frame.</li>
+  <li><strong>Wrapping</strong> — if our right pane is 60 cols and the tmux session is 120 cols, <code>capture-pane</code> returns 120-col lines and we either truncate or scroll. With our own vt10x we open the PTY at 60 cols and the producer reflows.</li>
+  <li><strong>Color fidelity</strong> — we already do the SGR translation ourselves; we don't depend on <code>tmux capture-pane -e</code>'s subset of escapes.</li>
+</ul>
+
+<h3>5.2 · The trade-offs to know about</h3>
+<ul>
+  <li><strong>One PTY per previewed window.</strong> Cheap, but it means N file descriptors and N tmux children if you ever preview multiple at once. Today, "selected window" is single, so this is one.</li>
+  <li><strong>Tmux clients see us.</strong> <code>tmux list-clients</code> will show an extra read-only client for the previewed session — visible in <code>display-message</code>, can affect tmux's <code>aggressive-resize</code>.</li>
+  <li><strong>Geometry coupling.</strong> Tmux clients negotiate a session size as the <em>minimum</em> of all attached clients. A small preview pane could shrink the session for any real attach. Workaround: client flag <code>-x/-y</code> + per-window <code>window-size manual</code>, or attach <code>-r</code> + <code>aggressive-resize on</code> with per-window sizes.</li>
+  <li><strong>Read-only attach is per-session, not per-window.</strong> <code>tmux attach -r -t ide-prod:editor</code> attaches you to the session and selects that window, but switching the previewed window means either sending a tmux command or re-attaching. Sending <code>select-window</code> via the attached client would also move <em>real</em> attaches; safer is detach + re-attach with a new <code>-t</code>.</li>
+  <li><strong>Lifecycle complexity.</strong> Today the preview state is purely cached strings — losing it is free. A persistent PTY has to be torn down on window change, on quit, on session-kill events; <code>EmbeddedTerminal.Close</code> already does this for terminal-mode and would need to be driven from the preview state machine too.</li>
+</ul>
+
+<div class="callout">
+  <h4>Pragmatic answer</h4>
+  <p style="margin:0">
+    Yes — the PTY path is strictly more precise (live cursor, reflow at our width, every animation frame). The cost is a persistent tmux client per previewed session and a small piece of lifecycle code to detach/re-attach when the selected window changes. The infrastructure already exists in <code>EmbeddedTerminal</code>: a "passive preview" mode is roughly "open the same way terminal-mode does, just drop <code>WriteInput</code> on the floor and don't switch focus to it". The honest blockers are tmux's session-size negotiation and the lifecycle bookkeeping, not the rendering pipeline.
+  </p>
+</div>
+
+<h2>6 · Sketch of the migration</h2>
+
+<pre>// new state on Model
+previewTerm *EmbeddedTerminal  // nil unless a window is selected
+previewKey  string             // session:window currently attached
+
+// when selection changes (or session goes live)
+func (m *Model) refreshPreview() tea.Cmd {
+    key := session + ":" + window
+    if m.previewKey == key { return nil }
+    if m.previewTerm != nil { m.previewTerm.Close() }
+    et := newEmbeddedTerminal(previewCols, previewRows)
+    // -r = read-only, -x/-y pin client size so we don't resize the session
+    cmd := exec.Command("tmux", "attach-session", "-r",
+        "-t", session + ":" + tmux.SafeWindowName(window),
+        "-x", strconv.Itoa(previewCols),
+        "-y", strconv.Itoa(previewRows))
+    // ... pty.StartWithSize as in Attach, but cache cmd on et
+    m.previewTerm = et
+    m.previewKey  = key
+    return readPTYCmd(et)
+}
+
+// view: replace renderPreviewRows() body with
+//   if m.previewTerm != nil { return strings.Split(m.previewTerm.Render(...), "\n") }
+</pre>
+
+<p>
+  Net change is ~80 lines plus deleting <code>capturePaneCmd</code> and the <code>previewTickMsg</code> ticker. <code>panePreviewMsg</code> and the <code>m.previewContent</code> / <code>m.previewBG</code> / <code>detectPreviewBG</code> machinery all become dead code.
+</p>
+
+</body>
+</html>

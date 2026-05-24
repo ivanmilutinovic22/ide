@@ -138,6 +138,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selectedEnv = idx
 					return m, m.captureCurrentWindowCmd()
 				}
+			case focusPaneAgents:
+				if items := m.agentItems(); idx < len(items) {
+					m.selectedAgent = idx
+				}
 			case focusPaneTemplates:
 				if idx < len(m.templates) {
 					m.selectedTemplate = idx
@@ -181,6 +185,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.focusPane == focusPaneEnvironments {
 			return m.updateEnvironmentPanelKey(key)
+		}
+		if m.focusPane == focusPaneAgents {
+			return m.updateAgentsPanelKey(key)
 		}
 		if m.focusPane == focusPaneWindows {
 			return m.updateWindowPanelKey(key)
@@ -552,21 +559,25 @@ func (m *Model) moveWindow(delta int) {
 }
 
 func (m *Model) toggleFocusPane() {
-	if m.focusPane == focusPaneEnvironments {
+	// Cycle: Sessions → Agents → Windows → Templates → Sessions
+	switch m.focusPane {
+	case focusPaneEnvironments:
+		m.focusPane = focusPaneAgents
+	case focusPaneAgents:
 		m.focusPane = focusPaneWindows
-		return
-	}
-	if m.focusPane == focusPaneWindows {
+	case focusPaneWindows:
 		m.focusPane = focusPaneTemplates
-		return
+	default:
+		m.focusPane = focusPaneEnvironments
 	}
-	m.focusPane = focusPaneEnvironments
 }
 
 func parsePaneShortcut(key string) (int, bool) {
 	switch key {
 	case "s":
 		return focusPaneEnvironments, true
+	case "a":
+		return focusPaneAgents, true
 	case "w":
 		return focusPaneWindows, true
 	case "t":
@@ -587,6 +598,8 @@ func focusedPaneStatus(pane int) string {
 	switch pane {
 	case focusPaneEnvironments:
 		return "Focused [s] Sessions panel"
+	case focusPaneAgents:
+		return "Focused [a] Agents panel"
 	case focusPaneWindows:
 		return "Focused [w] Windows panel"
 	case focusPaneTemplates:
@@ -604,7 +617,7 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.moveEnv(1)
 		return m, m.captureCurrentWindowCmd()
-	case "a":
+	case "c":
 		m.createMode = true
 		m.templateMode = false
 		m.createField = createFieldName
@@ -639,6 +652,55 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m *Model) moveAgent(delta int) {
+	count := len(m.agentItems())
+	m.selectedAgent = clampSelection(m.selectedAgent, delta, count)
+}
+
+func (m Model) updateAgentsPanelKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		m.moveAgent(-1)
+		return m, nil
+	case "down", "j":
+		m.moveAgent(1)
+		return m, nil
+	case "enter":
+		items := m.agentItems()
+		if m.selectedAgent < 0 || m.selectedAgent >= len(items) {
+			m.status = "No agent selected."
+			return m, nil
+		}
+		it := items[m.selectedAgent]
+		m.selectedEnv = it.envIdx
+		// Find window index within the selected env
+		for i, w := range m.currentWindowNames() {
+			if w == it.windowName {
+				m.selectedWindow = i
+				break
+			}
+		}
+		return m.startAttachSelected()
+	case "shift+enter":
+		items := m.agentItems()
+		if m.selectedAgent < 0 || m.selectedAgent >= len(items) {
+			m.status = "No agent selected."
+			return m, nil
+		}
+		it := items[m.selectedAgent]
+		m.selectedEnv = it.envIdx
+		for i, w := range m.currentWindowNames() {
+			if w == it.windowName {
+				m.selectedWindow = i
+				break
+			}
+		}
+		return m.enterTerminalMode()
+	default:
+		return m, nil
+	}
+}
+
 func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "left", "h", "up", "k":
@@ -650,18 +712,20 @@ func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "x", "d":
 		m.status = "Switch to [1] Sessions panel for this action"
 		return m, nil
-	case "a":
+	case "c":
 		m.status = "Switch to [1] Sessions panel to create environments"
 		return m, nil
-	case "t", "e", "c":
+	case "t", "e":
 		m.status = "Switch to [3] Templates panel for template actions"
 		return m, nil
 	case "H":
 		return m.startMoveWindow(-1)
 	case "L":
 		return m.startMoveWindow(1)
-	case "enter":
+	case "shift+enter":
 		return m.enterTerminalMode()
+	case "enter":
+		return m.startAttachSelected()
 	default:
 		return m, nil
 	}
@@ -675,7 +739,7 @@ func (m Model) updateTemplatesPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		m.moveTemplate(1)
 		return m, nil
-	case "a":
+	case "c":
 		return m.openCreateTemplateMode()
 	case "e", "enter":
 		return m.startEditTemplateMode()
@@ -1166,13 +1230,24 @@ func (m *Model) normalizeSelection() {
 
 	if len(m.templates) == 0 {
 		m.selectedTemplate = 0
-		return
+	} else {
+		if m.selectedTemplate >= len(m.templates) {
+			m.selectedTemplate = len(m.templates) - 1
+		}
+		if m.selectedTemplate < 0 {
+			m.selectedTemplate = 0
+		}
 	}
-	if m.selectedTemplate >= len(m.templates) {
-		m.selectedTemplate = len(m.templates) - 1
-	}
-	if m.selectedTemplate < 0 {
-		m.selectedTemplate = 0
+
+	if n := len(m.agentItems()); n == 0 {
+		m.selectedAgent = 0
+	} else {
+		if m.selectedAgent >= n {
+			m.selectedAgent = n - 1
+		}
+		if m.selectedAgent < 0 {
+			m.selectedAgent = 0
+		}
 	}
 }
 
@@ -1570,6 +1645,9 @@ func (m Model) executeShortcutAction(action string) (tea.Model, tea.Cmd) {
 	case "focus-sessions":
 		m.focusPane = focusPaneEnvironments
 		m.status = "Sessions panel focused"
+	case "focus-agents":
+		m.focusPane = focusPaneAgents
+		m.status = "Agents panel focused"
 	case "focus-windows":
 		m.focusPane = focusPaneWindows
 		m.status = "Windows panel focused"
@@ -1577,7 +1655,7 @@ func (m Model) executeShortcutAction(action string) (tea.Model, tea.Cmd) {
 		m.focusPane = focusPaneTemplates
 		m.status = "Templates panel focused"
 	case "cycle-panels":
-		m.focusPane = (m.focusPane + 1) % 3
+		m.focusPane = (m.focusPane + 1) % focusPaneCount
 	case "search":
 		m.showFuzzySearch = true
 		cmd := m.openFuzzySearch()
@@ -1618,9 +1696,10 @@ func (m Model) executeShortcutAction(action string) (tea.Model, tea.Cmd) {
 func shortcutsList() []shortcutItem {
 	return []shortcutItem{
 		{desc: "Global", isHeader: true},
-		{"1", "focus sessions panel", false, "focus-sessions"},
-		{"2", "focus windows panel", false, "focus-windows"},
-		{"3", "focus templates panel", false, "focus-templates"},
+		{"s", "focus sessions panel", false, "focus-sessions"},
+		{"a", "focus agents panel", false, "focus-agents"},
+		{"w", "focus windows panel", false, "focus-windows"},
+		{"t", "focus templates panel", false, "focus-templates"},
 		{"tab", "cycle panels", false, "cycle-panels"},
 		{"ctrl+p", "search", false, "search"},
 		{"n/N", "next/prev ai window", false, "next-ai"},
@@ -1631,22 +1710,29 @@ func shortcutsList() []shortcutItem {
 		{desc: "Sessions", isHeader: true},
 		{"j/k", "select prev/next", false, ""},
 		{"enter", "attach to session", false, ""},
-		{"a", "create environment", false, "create"},
+		{"c", "create environment", false, "create"},
 		{"e", "edit env template", false, "edit-env"},
 		{"r r", "restart session", false, ""},
 		{"T", "save windows as template", false, "extract-template"},
 		{"d d", "delete environment", false, ""},
 		{"x x", "kill session", false, ""},
 
+		{desc: "Agents", isHeader: true},
+		{"j/k", "select prev/next", false, ""},
+		{"enter", "attach to agent", false, ""},
+		{"shift+enter", "enter embedded terminal", false, ""},
+
 		{desc: "Windows", isHeader: true},
 		{"h/l", "select prev/next", false, ""},
-		{"enter", "enter terminal mode", false, ""},
+		{"enter", "attach to window", false, ""},
+		{"shift+enter", "enter embedded terminal", false, ""},
 		{"H/L", "reorder window", false, ""},
 		{"ctrl+q", "exit terminal mode", false, ""},
+		{"ctrl+b q", "exit terminal mode (tmux leader)", false, ""},
 
 		{desc: "Templates", isHeader: true},
 		{"j/k", "select prev/next", false, ""},
-		{"a", "create template", false, "create-template"},
+		{"c", "create template", false, "create-template"},
 		{"e/enter", "edit template", false, ""},
 		{"d d", "delete template", false, ""},
 

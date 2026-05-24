@@ -29,19 +29,20 @@ func (m Model) View() string {
 	if rightPaneHeight < 1 {
 		rightPaneHeight = 1
 	}
-	leftContentTotal := bodyHeight - 1 // -1 for vertical gap
-	if leftContentTotal < 2 {
-		leftContentTotal = 2
+	leftContentTotal := bodyHeight - 2 // -2 for two vertical gaps between three sections
+	if leftContentTotal < 3 {
+		leftContentTotal = 3
 	}
 
 	theme := m.currentTheme()
 	gapBG := lipgloss.Color(theme.AppBG)
 
-	topHeight, bottomHeight := splitLeftPaneHeights(leftContentTotal, len(m.templates))
-	leftTopPane := m.renderEnvironmentPane(leftWidth, topHeight)
-	leftBottomPane := m.renderTemplatesPane(leftWidth, bottomHeight)
+	sessionsHeight, agentsHeight, templatesHeight := splitLeftPaneHeights(leftContentTotal, len(m.agentItems()), len(m.templates))
+	sessionsPane := m.renderEnvironmentPane(leftWidth, sessionsHeight)
+	agentsPane := m.renderAgentsPane(leftWidth, agentsHeight)
+	templatesPane := m.renderTemplatesPane(leftWidth, templatesHeight)
 	verticalGap := lipgloss.NewStyle().Width(leftWidth).Background(gapBG).Render("")
-	leftPane := lipgloss.JoinVertical(lipgloss.Left, leftTopPane, verticalGap, leftBottomPane)
+	leftPane := lipgloss.JoinVertical(lipgloss.Left, sessionsPane, verticalGap, agentsPane, verticalGap, templatesPane)
 	rightPane := m.renderDetailsPane(rightWidth, rightPaneHeight)
 	horizontalGap := lipgloss.NewStyle().Width(1).Height(bodyHeight).Background(gapBG).Render("")
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, horizontalGap, rightPane)
@@ -293,20 +294,26 @@ func (m Model) contextShortcutHints() string {
 	case focusPaneEnvironments:
 		hints = append(hints,
 			m.shortcutHint("enter", "attach"),
-			m.shortcutHint("a", "create"),
+			m.shortcutHint("c", "create"),
 			m.shortcutHint("e", "edit"),
 			m.shortcutHint("r", "restart"),
 			m.shortcutHint("T", "save tmpl"),
 			m.shortcutHint("d", "delete"),
 		)
+	case focusPaneAgents:
+		hints = append(hints,
+			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("shift+enter", "terminal"),
+		)
 	case focusPaneWindows:
 		hints = append(hints,
-			m.shortcutHint("enter", "terminal"),
+			m.shortcutHint("enter", "attach"),
+			m.shortcutHint("shift+enter", "terminal"),
 			m.shortcutHint("H/L", "reorder"),
 		)
 	case focusPaneTemplates:
 		hints = append(hints,
-			m.shortcutHint("a", "create"),
+			m.shortcutHint("c", "create"),
 			m.shortcutHint("e", "edit"),
 			m.shortcutHint("d", "delete"),
 		)
@@ -507,24 +514,17 @@ func backdropSegment(segment string) string {
 	return backdropStyle.Render(ansi.Strip(segment))
 }
 
-func splitLeftPaneHeights(total, templateCount int) (int, int) {
-	return layout.SplitLeftPaneHeights(total, templateCount)
+func splitLeftPaneHeights(total, agentCount, templateCount int) (int, int, int) {
+	return layout.SplitLeftPaneHeights(total, agentCount, templateCount)
 }
 
 func (m Model) renderEnvironmentPane(width, height int) string {
-	rows := make([]string, 0, len(m.environments)+1)
-	focused := !m.createMode && !m.templateMode && !m.envEditMode && !m.extractMode && m.focusPane == focusPaneEnvironments
+	focused := m.paneFocused(focusPaneEnvironments)
 	theme := m.currentTheme()
 	title := panelTitle("s", "Sessions", focused, theme)
 	contentWidth := paneContentWidth(width)
 
-	if len(m.environments) == 0 {
-		rows = append(rows, "")
-		rows = append(rows, "No environments configured.")
-		rows = append(rows, "Press a to create one or edit ~/.config/ide/environments.json")
-		return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
-	}
-
+	rows := make([]string, 0, len(m.environments))
 	for idx, env := range m.environments {
 		sessionName := tmux.SessionName(env.Name)
 		_, running := m.sessions[sessionName]
@@ -532,89 +532,63 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 		if running {
 			state = "up"
 		}
-		num := "   "
-		if idx < 9 {
-			num = fmt.Sprintf("[%d]", idx+1)
-		}
 
-		// Check agent status across all windows
 		sessionStatus := AgentStatusIdle
 		if running {
 			sessionStatus = m.getSessionAgentStatus(env)
 		}
 		indicator := ""
-		if sessionStatus == AgentStatusCooking {
+		switch sessionStatus {
+		case AgentStatusCooking:
 			indicator = " ●"
-		} else if sessionStatus == AgentStatusAwaitingInput {
+		case AgentStatusAwaitingInput:
 			indicator = " ◆"
 		}
 
-		plainLine := fmt.Sprintf("%s %-20s [%s]%s", num, env.Name, state, indicator)
-		line := "  " + plainLine
-		if idx == m.selectedEnv {
-			if sessionStatus != AgentStatusIdle {
-				statusColor := m.getWindowStatusColor(sessionStatus)
-				selStyle := lipgloss.NewStyle().
-					Foreground(lipgloss.Color(statusColor)).
-					Background(lipgloss.Color(theme.SelectedBG)).
-					Bold(true)
-				line = renderStyledPaneLine(selStyle, "▸ "+plainLine, contentWidth)
-			} else {
-				line = renderStyledPaneLine(selectedLineStyle, "▸ "+plainLine, contentWidth)
-			}
-		} else if running && sessionStatus != AgentStatusIdle {
+		content := fmt.Sprintf("%s %-20s [%s]%s", numPrefix(idx), env.Name, state, indicator)
+		selected := idx == m.selectedEnv
+		selectedStyle := selectedLineStyle
+		var defaultStyle *lipgloss.Style
+
+		if sessionStatus != AgentStatusIdle {
 			statusColor := m.getWindowStatusColor(sessionStatus)
-			stStyle := lipgloss.NewStyle().
+			selectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color(statusColor)).
+				Background(lipgloss.Color(theme.SelectedBG)).
+				Bold(true)
+			ds := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(statusColor)).
 				Background(lipgloss.Color(theme.PaneBG)).
 				Bold(true)
-			line = renderStyledPaneLine(stStyle, line, contentWidth)
+			defaultStyle = &ds
+		} else if running {
+			ds := activeSessionStyle
+			defaultStyle = &ds
 		} else {
-			if running {
-				line = renderStyledPaneLine(activeSessionStyle, line, contentWidth)
-			} else {
-				line = renderStyledPaneLine(inactiveSessionStyle, line, contentWidth)
-			}
+			ds := inactiveSessionStyle
+			defaultStyle = &ds
 		}
-		rows = append(rows, line)
+
+		rows = append(rows, renderListRow(content, selected, contentWidth, selectedStyle, defaultStyle))
 	}
 
-	visibleHeight := height - 1 // title takes 1 row
-	rows = viewportSlice(rows, m.selectedEnv, visibleHeight)
-	return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
+	empty := []string{"", "No environments configured.", "Press c to create one or edit ~/.config/ide/environments.json"}
+	return m.renderListPane(width, height, title, focused, rows, m.selectedEnv, empty)
 }
 
 func (m Model) renderTemplatesPane(width, height int) string {
-	rows := make([]string, 0, len(m.templates)+2)
-	focused := !m.createMode && !m.templateMode && !m.envEditMode && !m.extractMode && m.focusPane == focusPaneTemplates
-	theme := m.currentTheme()
-	title := panelTitle("t", "Templates", focused, theme)
+	focused := m.paneFocused(focusPaneTemplates)
+	title := panelTitle("t", "Templates", focused, m.currentTheme())
 	contentWidth := paneContentWidth(width)
 
-	if len(m.templates) == 0 {
-		rows = append(rows, "")
-		rows = append(rows, "No templates saved.")
-		rows = append(rows, "Press a in this panel to add one.")
-		return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
-	}
-
+	rows := make([]string, 0, len(m.templates))
 	for idx, tpl := range m.templates {
-		num := "   "
-		if idx < 9 {
-			num = fmt.Sprintf("[%d]", idx+1)
-		}
-		line := fmt.Sprintf("%s %-15s (%d windows)", num, tpl.Name, len(tpl.Windows))
-		if idx == m.selectedTemplate {
-			line = renderStyledPaneLine(selectedLineStyle, "▸ "+line, contentWidth)
-		} else {
-			line = padLineToWidth("  "+line, contentWidth)
-		}
-		rows = append(rows, line)
+		content := fmt.Sprintf("%s %-15s (%d windows)", numPrefix(idx), tpl.Name, len(tpl.Windows))
+		rows = append(rows, renderListRow(content, idx == m.selectedTemplate, contentWidth, selectedLineStyle, nil))
 	}
 
-	visibleHeight := height - 1 // title takes 1 row
-	rows = viewportSlice(rows, m.selectedTemplate, visibleHeight)
-	return renderPaneWithTitle(width, height, title, strings.Join(rows, "\n"), focused)
+	empty := []string{"", "No templates saved.", "Press c in this panel to add one."}
+	return m.renderListPane(width, height, title, focused, rows, m.selectedTemplate, empty)
 }
 
 func (m Model) renderDetailsPane(width, height int) string {

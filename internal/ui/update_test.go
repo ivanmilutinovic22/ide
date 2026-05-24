@@ -235,9 +235,9 @@ func TestParseWindowSpec(t *testing.T) {
 
 // TestShortcutsListAmbiguousKeyResolvesByCursor sanity-checks that the
 // ambiguity targeted by updateShortcutsMode's cursor-first dispatch is real:
-// the help overlay has two rows keyed "a" — one for create-environment in the
+// the help overlay has two rows keyed "c" — one for create-environment in the
 // Sessions section and one for create-template in the Templates section.
-// Without cursor-aware dispatch, pressing "a" while focused on the templates
+// Without cursor-aware dispatch, pressing "c" while focused on the templates
 // row would still fire create-environment because the list scan returns the
 // first match.
 func TestShortcutsListAmbiguousKeyResolvesByCursor(t *testing.T) {
@@ -247,18 +247,18 @@ func TestShortcutsListAmbiguousKeyResolvesByCursor(t *testing.T) {
 		if it.isHeader {
 			continue
 		}
-		if it.key == "a" && it.action == "create" {
+		if it.key == "c" && it.action == "create" {
 			envIndex = i
 		}
-		if it.key == "a" && it.action == "create-template" {
+		if it.key == "c" && it.action == "create-template" {
 			tmplIndex = i
 		}
 	}
 	if envIndex < 0 || tmplIndex < 0 {
-		t.Fatalf("expected both 'a' rows in shortcutsList; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
+		t.Fatalf("expected both 'c' rows in shortcutsList; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
 	}
 	if tmplIndex <= envIndex {
-		t.Fatalf("expected templates 'a' row to come after env 'a' row; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
+		t.Fatalf("expected templates 'c' row to come after env 'c' row; got envIndex=%d tmplIndex=%d", envIndex, tmplIndex)
 	}
 }
 

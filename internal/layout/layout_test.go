@@ -51,36 +51,38 @@ func TestViewportSlice(t *testing.T) {
 	}
 }
 
-// TestSplitLeftPaneHeights verifies that the templates pane is sized to its
-// content (with a small slack) when there are few templates, while still
-// reserving room for the placeholder when the list is empty, and capping at
-// half the column when there are many templates.
+// TestSplitLeftPaneHeights verifies the three-way split between Sessions
+// (top), Agents (middle), and Templates (bottom). Agents and Templates each
+// reserve room for ~5 rows so adding a few entries doesn't reflow, but
+// neither claims more than 1/3 of the column.
 func TestSplitLeftPaneHeights(t *testing.T) {
 	tests := []struct {
-		name          string
-		total         int
-		templateCount int
-		wantTop       int
-		wantBottom    int
+		name        string
+		total       int
+		agentCount  int
+		tmplCount   int
+		wantSession int
+		wantAgents  int
+		wantTmpl    int
 	}{
-		{"tiny total", 2, 5, 1, 1},
-		{"empty templates still reserves min visible (5)", 50, 0, 43, 7},
-		{"single template still reserves min visible (5)", 50, 1, 43, 7},
-		{"three templates still reserves min visible (5)", 50, 3, 43, 7},
-		{"five templates uses min row count", 50, 5, 43, 7},
-		{"more than min grows pane", 50, 8, 40, 10},
-		{"many templates capped at half", 50, 30, 25, 25},
-		{"narrow column falls back to half", 8, 0, 4, 4},
+		{"tiny total", 3, 5, 5, 1, 1, 1},
+		{"empty agents+templates reserve min visible (5)", 60, 0, 0, 46, 7, 7},
+		{"few agents, few templates use min", 60, 1, 3, 46, 7, 7},
+		{"more than min grows agents pane", 60, 8, 3, 43, 10, 7},
+		{"more than min grows templates pane", 60, 3, 8, 43, 7, 10},
+		{"agents capped at 1/3", 60, 30, 0, 33, 20, 7},
+		{"templates capped at 1/3", 60, 0, 30, 33, 7, 20},
+		{"both capped at 1/3 each", 60, 30, 30, 20, 20, 20},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			top, bottom := SplitLeftPaneHeights(tc.total, tc.templateCount)
-			if top != tc.wantTop || bottom != tc.wantBottom {
-				t.Errorf("SplitLeftPaneHeights(%d, %d) = (%d, %d), want (%d, %d)",
-					tc.total, tc.templateCount, top, bottom, tc.wantTop, tc.wantBottom)
+			s, a, b := SplitLeftPaneHeights(tc.total, tc.agentCount, tc.tmplCount)
+			if s != tc.wantSession || a != tc.wantAgents || b != tc.wantTmpl {
+				t.Errorf("SplitLeftPaneHeights(%d, %d, %d) = (%d, %d, %d), want (%d, %d, %d)",
+					tc.total, tc.agentCount, tc.tmplCount, s, a, b, tc.wantSession, tc.wantAgents, tc.wantTmpl)
 			}
-			if top+bottom != tc.total {
-				t.Errorf("top+bottom = %d, want %d", top+bottom, tc.total)
+			if s+a+b != tc.total {
+				t.Errorf("sessions+agents+templates = %d, want %d", s+a+b, tc.total)
 			}
 		})
 	}

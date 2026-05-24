@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ide — package & file graph</title>
+<style>
+  :root {
+    --base:      #eff1f5;
+    --mantle:    #e6e9ef;
+    --crust:     #dce0e8;
+    --text:      #4c4f69;
+    --subtext1:  #5c5f77;
+    --subtext0:  #6c6f85;
+    --overlay2:  #7c7f93;
+    --overlay1:  #8c8fa1;
+    --overlay0:  #9ca0b0;
+    --surface2:  #acb0be;
+    --surface1:  #bcc0cc;
+    --surface0:  #ccd0da;
+    --rosewater: #dc8a78;
+    --flamingo:  #dd7878;
+    --pink:      #ea76cb;
+    --mauve:     #8839ef;
+    --red:       #d20f39;
+    --maroon:    #e64553;
+    --peach:     #fe640b;
+    --yellow:    #df8e1d;
+    --green:     #40a02b;
+    --teal:      #179299;
+    --sky:       #04a5e5;
+    --sapphire:  #209fb5;
+    --blue:      #1e66f5;
+    --lavender:  #7287fd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--base); color: var(--text); }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 32px 48px 64px;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+  h1 { font-weight: 600; font-size: 28px; margin: 0 0 6px; }
+  h2 { font-weight: 600; font-size: 20px; margin: 36px 0 10px; color: var(--mauve); border-bottom: 1px solid var(--surface0); padding-bottom: 6px; }
+  h3 { font-weight: 600; font-size: 15px; margin: 18px 0 6px; color: var(--blue); }
+  p, li { color: var(--subtext1); }
+  code, .mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 0.92em; background: var(--mantle); padding: 1px 5px; border-radius: 4px; }
+  .subtitle { color: var(--subtext0); margin-top: 0; }
+
+  /* ===== Diagram ===== */
+  .diagram {
+    position: relative;
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 16px 0 28px;
+  }
+  .diagram svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 28px 36px;
+    z-index: 1;
+  }
+  .node {
+    position: relative;
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-left: 4px solid var(--blue);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 0 var(--crust);
+  }
+  .node.entry    { border-left-color: var(--mauve); }
+  .node.dispatch { border-left-color: var(--pink); }
+  .node.cli      { border-left-color: var(--peach); }
+  .node.run      { border-left-color: var(--maroon); }
+  .node.ui       { border-left-color: var(--red); }
+  .node.config   { border-left-color: var(--yellow); }
+  .node.tmux     { border-left-color: var(--green); }
+  .node.theme    { border-left-color: var(--teal); }
+  .node.layout   { border-left-color: var(--sky); }
+  .node.agent    { border-left-color: var(--sapphire); }
+  .node.term     { border-left-color: var(--lavender); }
+
+  .node .title { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 13px; font-weight: 600; color: var(--text); }
+  .node .files { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 11px; color: var(--subtext0); margin-top: 4px; word-break: break-all; }
+  .node .desc  { font-size: 12px; color: var(--subtext1); margin-top: 6px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--subtext1); margin-bottom: 12px; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { display: inline-block; width: 28px; height: 3px; border-radius: 2px; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--surface0); vertical-align: top; }
+  th { color: var(--mauve); font-weight: 600; }
+  td.fn { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--maroon); white-space: nowrap; }
+  td.target { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--blue); }
+
+  ul { padding-left: 22px; }
+  ul li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>ide — package &amp; file graph</h1>
+<p class="subtitle">A walking tour of how the binary flows from <code>main.go</code> into the tmux-driven TUI, with one box per package.</p>
+
+<h2>1 · Package dependency graph</h2>
+
+<div class="legend">
+  <span class="item"><span class="swatch" style="background:var(--mauve)"></span>entry</span>
+  <span class="item"><span class="swatch" style="background:var(--pink)"></span>dispatch</span>
+  <span class="item"><span class="swatch" style="background:var(--maroon)"></span>bubble-tea runners</span>
+  <span class="item"><span class="swatch" style="background:var(--peach)"></span>cli (non-TUI)</span>
+  <span class="item"><span class="swatch" style="background:var(--red)"></span>ui (TUI core)</span>
+  <span class="item"><span class="swatch" style="background:var(--yellow)"></span>data</span>
+  <span class="item"><span class="swatch" style="background:var(--green)"></span>tmux wrapper</span>
+  <span class="item"><span class="swatch" style="background:var(--teal)"></span>pure / leaf</span>
+</div>
+
+<div class="diagram">
+  <svg viewBox="0 0 1200 760" preserveAspectRatio="none">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+      <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e66f5"/>
+      </marker>
+    </defs>
+
+    <!-- main → cmd/run -->
+    <path d="M 600,55 L 600,115" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- cmd/run → cli -->
+    <path d="M 510,145 C 380,160 250,180 220,205" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- cmd/run → run -->
+    <path d="M 690,145 C 820,160 950,180 980,205" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- cli → config -->
+    <path d="M 220,275 C 220,330 380,360 510,375" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow-blue)"/>
+    <!-- run → ui -->
+    <path d="M 980,275 C 980,330 820,360 690,375" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow-blue)"/>
+    <!-- run → terminal -->
+    <path d="M 1030,275 C 1075,320 1090,360 1080,395" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- ui → config -->
+    <path d="M 600,460 L 600,520" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- ui → tmux -->
+    <path d="M 690,440 C 800,500 880,540 920,560" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- ui → theme -->
+    <path d="M 510,440 C 400,500 320,540 280,560" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- ui → agentstatus -->
+    <path d="M 530,460 C 460,540 420,600 400,640" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- ui → layout -->
+    <path d="M 670,460 C 740,540 780,600 800,640" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- tmux → config -->
+    <path d="M 920,580 C 800,560 700,545 690,540" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+  </svg>
+
+  <div class="grid">
+    <!-- row 1 -->
+    <div></div>
+    <div class="node entry" style="grid-column: 2;">
+      <div class="title">main</div>
+      <div class="files">main.go</div>
+      <div class="desc">One-line entry. Calls <code>run.Dispatch()</code> and exits with its code.</div>
+    </div>
+    <div></div>
+
+    <!-- row 2 -->
+    <div></div>
+    <div class="node dispatch" style="grid-column: 2;">
+      <div class="title">cmd/run</div>
+      <div class="files">run.go</div>
+      <div class="desc">Argv dispatcher. Routes to <code>cli</code> for sub-commands, to <code>run.Main</code> / <code>run.Search</code> for TUI.</div>
+    </div>
+    <div></div>
+
+    <!-- row 3 -->
+    <div class="node cli">
+      <div class="title">internal/cli</div>
+      <div class="files">cli.go · env.go · window.go · template.go · flags.go</div>
+      <div class="desc">Non-TUI CRUD over <code>environments.json</code>. <code>ide env …</code> and <code>ide template …</code> live here.</div>
+    </div>
+    <div></div>
+    <div class="node run">
+      <div class="title">run</div>
+      <div class="files">ide.go · search.go</div>
+      <div class="desc">Bubble Tea program runners. <code>Main()</code> builds the full TUI; <code>Search()</code> builds the popup model.</div>
+    </div>
+
+    <!-- row 4 -->
+    <div></div>
+    <div class="node ui" style="grid-column: 2;">
+      <div class="title">internal/ui</div>
+      <div class="files">model.go · update.go · view.go · commands.go · search.go · terminal.go · agent_status.go · themes.go · fuzzy.go</div>
+      <div class="desc">The TUI itself. Holds Model state, the keyboard <code>Update</code>, the <code>View</code> renderer, async <code>tea.Cmd</code> wrappers, and the embedded PTY terminal.</div>
+    </div>
+    <div class="node term">
+      <div class="title">internal/terminal</div>
+      <div class="files">bg.go</div>
+      <div class="desc">OSC 11 query for the terminal background color — fired once before Bubble Tea takes the screen.</div>
+    </div>
+
+    <!-- row 5 -->
+    <div class="node theme">
+      <div class="title">internal/theme</div>
+      <div class="files">theme.go</div>
+      <div class="desc">Pure color-palette data + <code>Normalize</code> fallback chain. No lipgloss dep.</div>
+    </div>
+    <div class="node config">
+      <div class="title">internal/config</div>
+      <div class="files">config.go</div>
+      <div class="desc">JSON persistence at <code>~/.config/ide/environments.json</code>. Defines <code>Environment</code>, <code>Template</code>, <code>WindowTemplate</code>.</div>
+    </div>
+    <div class="node tmux">
+      <div class="title">internal/tmux</div>
+      <div class="files">tmux.go</div>
+      <div class="desc">Shell-out wrapper around the <code>tmux</code> CLI: list/kill/attach sessions, send keys, build new sessions from a config.</div>
+    </div>
+
+    <!-- row 6 -->
+    <div class="node agent">
+      <div class="title">internal/agentstatus</div>
+      <div class="files">agentstatus.go</div>
+      <div class="desc">Pure detection of AI-CLI process state (idle / cooking / awaiting input). No UI, no tmux calls — fed by polling messages from <code>ui</code>.</div>
+    </div>
+    <div></div>
+    <div class="node layout">
+      <div class="title">internal/layout</div>
+      <div class="files">layout.go</div>
+      <div class="desc">Pure geometry: pane split widths, modal sizing, visible slice of scrollable lists. Easy to unit-test.</div>
+    </div>
+  </div>
+</div>
+
+<p style="font-size:12px;color:var(--subtext0);margin-top:-12px">
+  Blue arrows mark the two big <em>fan-outs</em>: <code>cli → config</code> (CRUD path) and <code>run → ui</code> (TUI path). Grey arrows are normal imports.
+</p>
+
+<h2>2 · The call path, end to end</h2>
+
+<h3>2.1 Boot</h3>
+<ul>
+  <li><code>main.main</code> → <code>cmd/run.Dispatch()</code></li>
+  <li><code>Dispatch</code> reads <code>os.Args[1:]</code>, handles <code>--help</code> / <code>--version</code>, then branches:
+    <ul>
+      <li>first arg is in <code>cli.Subcommands</code> (<code>env</code>, <code>template</code>) → <code>cli.Run(args)</code></li>
+      <li><code>--search</code> → <code>run.Search()</code></li>
+      <li>otherwise → <code>run.Main()</code></li>
+    </ul>
+  </li>
+</ul>
+
+<h3>2.2 CLI path (no TUI)</h3>
+<table>
+  <tr><th>Caller</th><th>Callee</th><th>What it does</th></tr>
+  <tr><td class="fn">cli.Run</td><td class="target">dispatchEnv / dispatchTemplate</td><td>Sub-command router on <code>args[0]</code>.</td></tr>
+  <tr><td class="fn">env*.go</td><td class="target">config.Load / config.Save</td><td>Read-modify-write the JSON file.</td></tr>
+  <tr><td class="fn">window.go</td><td class="target">config.Save</td><td>Mutates <code>env.Windows</code> or <code>template.Windows</code> in place.</td></tr>
+  <tr><td class="fn">flags.go</td><td class="target">stdlib flag</td><td>Wraps <code>flag.FlagSet</code> with positional-anywhere parsing and a <code>seen</code> map so <code>set</code> distinguishes "omitted" from "empty".</td></tr>
+</table>
+
+<h3>2.3 TUI path</h3>
+<table>
+  <tr><th>Caller</th><th>Callee</th><th>What it does</th></tr>
+  <tr><td class="fn">run.Main</td><td class="target">terminal.QueryBackgroundColor</td><td>OSC 11 probe before bubbletea grabs the tty.</td></tr>
+  <tr><td class="fn">run.Main</td><td class="target">ui.NewModel(bg)</td><td>Builds the root Model with the detected background.</td></tr>
+  <tr><td class="fn">run.Main</td><td class="target">tea.NewProgram().Run()</td><td>Standard Bubble Tea event loop.</td></tr>
+  <tr><td class="fn">Model.Init</td><td class="target">loadConfigCmd, loadSessionsCmd</td><td>Two parallel <code>tea.Cmd</code>s. Results arrive as typed msgs.</td></tr>
+  <tr><td class="fn">Model.Update</td><td class="target">configLoadedMsg / sessionsLoadedMsg / tickMsg / …</td><td>Big switch in <code>update.go</code>. Mutates model, returns next <code>tea.Cmd</code>.</td></tr>
+  <tr><td class="fn">Model.Update</td><td class="target">tmux.*</td><td>Issued via <code>tea.Cmd</code>: <code>NewSession</code>, <code>KillSession</code>, <code>SendKeys</code>, <code>ListSessions</code>, …</td></tr>
+  <tr><td class="fn">Model.View</td><td class="target">layout.SplitPaneWidths</td><td>Pure geometry. View also calls <code>tmux</code>-formatted strings already cached on the model.</td></tr>
+  <tr><td class="fn">ui.agent_status</td><td class="target">agentstatus.Detect</td><td>Thin shim: per-window <code>ProcessInfo</code> snapshots → idle / cooking / awaiting-input state machine.</td></tr>
+  <tr><td class="fn">ui.themes</td><td class="target">theme.Defaults / theme.Normalize</td><td>20 palettes; <code>applyThemeStyles</code> bakes them into lipgloss styles.</td></tr>
+  <tr><td class="fn">ui.terminal</td><td class="target">vt10x + pty</td><td>Embedded terminal pane for the "attach inline" mode — own vt10x emulator driven by a pty.</td></tr>
+</table>
+
+<h3>2.4 Search popup path</h3>
+<ul>
+  <li><code>run.Search</code> → <code>ui.NewSearchModel()</code> → a leaner Bubble Tea model used by the tmux <code>prefix+a</code> keybinding.</li>
+  <li><code>SearchModel</code> reads the same <code>config</code> + live <code>tmux</code> data, applies <code>fuzzyMatch</code> from <code>fuzzy.go</code>, and on Enter shells out to attach the chosen window.</li>
+</ul>
+
+<h2>3 · Where the layers split</h2>
+<ul>
+  <li><strong>Side-effecting shells:</strong> <code>internal/tmux</code> (exec.Command "tmux …"), <code>internal/terminal</code> (raw tty), <code>internal/config</code> (filesystem).</li>
+  <li><strong>Pure logic:</strong> <code>internal/layout</code>, <code>internal/theme</code>, <code>internal/agentstatus</code>, <code>internal/ui/fuzzy</code>. These have unit tests; the side-effecting layers don't.</li>
+  <li><strong>State + glue:</strong> <code>internal/ui</code>. Everything that touches Model state lives here. The reason <code>agent_status.go</code> / <code>themes.go</code> are <em>shims</em> over their pure cousins is so the bulk of the package doesn't get rewritten as the leaf packages evolve.</li>
+</ul>
+
+<h2>4 · Tmux session naming convention</h2>
+<p>
+  <code>tmux.SessionName("prod")</code> → <code>ide-prod</code>. This is the contract between the TUI list and the live tmux server: the UI knows a session belongs to the tool because the name starts with <code>ide-</code>, and it can map an environment row to its session by name without storing a tmux ID.
+</p>
+
+<h2>5 · Config file as single source of truth</h2>
+<p>
+  Both the CLI and the TUI mutate <code>~/.config/ide/environments.json</code> via <code>internal/config</code>. There is no in-memory daemon — the TUI re-reads on focus and after every write. That's why <code>config</code> is the most-imported package after <code>ui</code>.
+</p>
+
+</body>
+</html>

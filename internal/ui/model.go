@@ -77,9 +77,12 @@ const (
 
 const (
 	focusPaneEnvironments = iota
+	focusPaneAgents
 	focusPaneWindows
 	focusPaneTemplates
 )
+
+const focusPaneCount = 4
 
 const (
 	templateFieldName = iota
@@ -160,6 +163,7 @@ type Model struct {
 	selectedEnv           int
 	selectedWindow        int
 	selectedTemplate      int
+	selectedAgent         int
 	sessions              map[string]struct{}
 	sessionWindows        map[string][]string
 	createMode            bool
@@ -211,6 +215,7 @@ type Model struct {
 	fuzzySearchCache      []fuzzyEnvCacheEntry
 	terminalMode          bool              // true = keys forwarded to embedded PTY
 	embeddedTerm          *EmbeddedTerminal // live PTY + VT emulator
+	leaderPending         bool              // true = previous key was tmux prefix (ctrl+b); next key may be a leader binding (e.g. q to exit)
 }
 
 func newTextInput(prompt, placeholder string) textinput.Model {

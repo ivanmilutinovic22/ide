@@ -311,14 +311,35 @@ func (m Model) enterTerminalMode() (tea.Model, tea.Cmd) {
 }
 
 // updateTerminalMode handles key events when in interactive terminal mode.
+//
+// Two ways to leave terminal mode:
+//   - ctrl+q  — direct exit
+//   - ctrl+b q — tmux-leader style: press prefix, then q. The first ctrl+b is
+//     buffered (not forwarded yet); if the next key is q we exit, otherwise
+//     we forward both keys so other prefix bindings (e.g. ctrl+b 1) still work.
 func (m Model) updateTerminalMode(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+q" {
-		m.terminalMode = false
-		if m.embeddedTerm != nil {
-			m.embeddedTerm.Close()
-			m.embeddedTerm = nil
+		m.leaderPending = false
+		return m.exitTerminalMode(), nil
+	}
+
+	if m.leaderPending {
+		m.leaderPending = false
+		if key == "q" {
+			return m.exitTerminalMode(), nil
 		}
-		m.status = focusedPaneStatus(m.focusPane)
+		// Not our binding — replay the buffered ctrl+b before this key.
+		if m.embeddedTerm != nil {
+			m.embeddedTerm.WriteInput(keyToBytes("ctrl+b"))
+			if data := keyToBytes(key); len(data) > 0 {
+				m.embeddedTerm.WriteInput(data)
+			}
+		}
+		return m, nil
+	}
+
+	if key == "ctrl+b" {
+		m.leaderPending = true
 		return m, nil
 	}
 
@@ -329,6 +350,16 @@ func (m Model) updateTerminalMode(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) exitTerminalMode() Model {
+	m.terminalMode = false
+	if m.embeddedTerm != nil {
+		m.embeddedTerm.Close()
+		m.embeddedTerm = nil
+	}
+	m.status = focusedPaneStatus(m.focusPane)
+	return m
 }
 
 // glyphSGR produces an ANSI SGR escape sequence for a vt10x glyph's style.
