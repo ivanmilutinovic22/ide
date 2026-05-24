@@ -7,7 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// configMu serializes read-modify-write sequences (LoadAll → mutate →
+// SaveAll) within a single process. Two goroutines calling, say,
+// Save(envs) and SaveTemplates(t) concurrently would each LoadAll, mutate
+// their own slice, and SaveAll — clobbering whichever one wrote last.
+// This guards the in-process case; cross-process safety (CLI subprocess
+// vs. TUI) is still best-effort.
+var configMu sync.Mutex
 
 type WindowTemplate struct {
 	Name string   `json:"name"`
@@ -95,6 +104,13 @@ func LoadTemplates() ([]Template, error) {
 }
 
 func LoadAll() (Data, error) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	return loadAllLocked()
+}
+
+// loadAllLocked is the body of LoadAll, callable while configMu is already held.
+func loadAllLocked() (Data, error) {
 	if err := EnsureExists(); err != nil {
 		return Data{}, err
 	}
@@ -130,33 +146,46 @@ func LoadAll() (Data, error) {
 }
 
 func Save(environments []Environment) error {
-	data, err := LoadAll()
+	configMu.Lock()
+	defer configMu.Unlock()
+	data, err := loadAllLocked()
 	if err != nil {
 		return err
 	}
 	data.Environments = environments
-	return SaveAll(data)
+	return saveAllLocked(data)
 }
 
 func SaveTemplates(templates []Template) error {
-	data, err := LoadAll()
+	configMu.Lock()
+	defer configMu.Unlock()
+	data, err := loadAllLocked()
 	if err != nil {
 		return err
 	}
 	data.Templates = templates
-	return SaveAll(data)
+	return saveAllLocked(data)
 }
 
 func SaveTheme(theme string) error {
-	data, err := LoadAll()
+	configMu.Lock()
+	defer configMu.Unlock()
+	data, err := loadAllLocked()
 	if err != nil {
 		return err
 	}
 	data.Theme = strings.TrimSpace(theme)
-	return SaveAll(data)
+	return saveAllLocked(data)
 }
 
 func SaveAll(data Data) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	return saveAllLocked(data)
+}
+
+// saveAllLocked is the body of SaveAll, callable while configMu is already held.
+func saveAllLocked(data Data) error {
 	if err := EnsureExists(); err != nil {
 		return err
 	}
@@ -187,9 +216,26 @@ func SaveAll(data Data) error {
 	return nil
 }
 
+// Update runs `mutate` under the config mutex with a freshly-loaded Data,
+// then persists the result. Use this anywhere you'd otherwise do LoadAll →
+// modify → SaveAll, to prevent ABA races between concurrent writers (e.g.
+// CLI subprocess + TUI). If mutate returns an error, the file is left
+// untouched.
+func Update(mutate func(*Data) error) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	data, err := loadAllLocked()
+	if err != nil {
+		return err
+	}
+	if err := mutate(&data); err != nil {
+		return err
+	}
+	return saveAllLocked(data)
+}
+
 func DefaultWindows() []WindowTemplate {
-	windows := legacyDefaultWindows("")
-	return cloneWindows(windows)
+	return cloneWindows(legacyDefaultWindows())
 }
 
 func DefaultTemplates() []Template {
@@ -216,7 +262,7 @@ func normalizeEnvironment(env *Environment) {
 	}
 	env.Root = normalizePath(env.Root)
 	if len(env.Windows) == 0 {
-		env.Windows = legacyDefaultWindows(env.DBConnection)
+		env.Windows = legacyDefaultWindows()
 	}
 	env.Windows = normalizeWindows(env.Windows)
 }
@@ -264,7 +310,7 @@ func normalizePath(value string) string {
 	return filepath.Clean(value)
 }
 
-func legacyDefaultWindows(dbConnection string) []WindowTemplate {
+func legacyDefaultWindows() []WindowTemplate {
 	return []WindowTemplate{
 		{Name: "editor", Cmd: "nvim ."},
 		{Name: "terminal"},

@@ -56,8 +56,32 @@ func splitNonEmptyLines(s string) []string {
 	return out
 }
 
-func HasSession(session string) bool {
-	return exec.Command("tmux", "has-session", "-t", session).Run() == nil
+// HasSession reports whether the tmux server is running and has a session
+// with the given name. The bool answers the question; the error is non-nil
+// only when tmux itself failed in a way distinct from "no such session"
+// (e.g. tmux not installed or socket dir unreadable).
+func HasSession(session string) (bool, error) {
+	cmd := exec.Command("tmux", "has-session", "-t", session)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		text := stderr.String()
+		// tmux exits non-zero with these messages when the session simply
+		// doesn't exist; that's the "no" answer, not an error.
+		if strings.Contains(text, "no server running") ||
+			strings.Contains(text, "can't find session") ||
+			strings.Contains(text, "session not found") {
+			return false, nil
+		}
+		// Distinguish process-startup failures (tmux missing, permission
+		// denied) from session-not-found by inspecting the exit error kind.
+		if _, ok := err.(*exec.ExitError); ok {
+			// Non-zero exit with an unrecognised stderr — treat as no.
+			return false, nil
+		}
+		return false, fmt.Errorf("has-session: %w", err)
+	}
+	return true, nil
 }
 
 func ListSessions() ([]string, error) {
@@ -223,6 +247,25 @@ func BindSearchKey(ideBinary string) {
 	}
 }
 
+// SwapWindow swaps two windows live in the running tmux session.
+// Best-effort: returns the underlying error so callers can decide whether
+// to surface or ignore it.
+func SwapWindow(session, src, dst string) error {
+	if _, err := runTmux("swap-window", "-s", session+":"+src, "-t", session+":"+dst); err != nil {
+		return fmt.Errorf("swap-window %s:%s -> %s:%s: %w", session, src, session, dst, err)
+	}
+	return nil
+}
+
+// SelectWindow brings target to the foreground in the running tmux session.
+// Best-effort: any error is returned.
+func SelectWindow(target string) error {
+	if _, err := runTmux("select-window", "-t", target); err != nil {
+		return fmt.Errorf("select-window %s: %w", target, err)
+	}
+	return nil
+}
+
 func AttachTarget(env config.Environment, windowName string) string {
 	session := SessionName(env.Name)
 	if strings.TrimSpace(windowName) == "" {
@@ -312,9 +355,17 @@ func PaneSize(session, window string) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	var cols, rows int
-	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d %d", &cols, &rows); err != nil {
-		return 0, 0, err
+	fields := strings.Fields(out)
+	if len(fields) < 2 {
+		return 0, 0, fmt.Errorf("pane size: unexpected output %q", strings.TrimSpace(out))
+	}
+	cols, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, fmt.Errorf("pane size: cols: %w", err)
+	}
+	rows, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("pane size: rows: %w", err)
 	}
 	return cols, rows, nil
 }
@@ -334,115 +385,113 @@ type ProcessInfo struct {
 	State string
 }
 
-// GetPaneProcessInfo retrieves the current process info for a pane.
-// It sums CPU usage across all descendant processes of the pane's shell,
-// giving an accurate picture of total activity in the pane.
-func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
-	target := session + ":" + SafeWindowName(window)
+// procRow is one entry from the system-wide `ps` snapshot.
+type procRow struct {
+	pid   int
+	ppid  int
+	cpu   float64
+	state string
+}
 
-	// Get pane PID (this is the shell process)
-	cmd := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_pid}")
+// snapshotProcesses runs `ps` ONCE and returns the full process table keyed
+// by PID. Old code spawned one `pgrep` per node plus one `ps` per child of
+// the pane's process tree, for every AI window, every 500ms. That fork-bombed
+// the system; this version is one subprocess per poll regardless of tree size.
+func snapshotProcesses() (map[int]procRow, error) {
+	// Use "=" suffix on format specifiers to suppress headers (works on
+	// macOS and Linux). Order: pid, ppid, %cpu, state.
+	cmd := exec.Command("ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "%cpu=", "-o", "state=")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		log.Printf("[TMUX-DEBUG] Failed to get pane PID: %v", err)
+		return nil, fmt.Errorf("ps -A: %w", err)
+	}
+	rows := map[int]procRow{}
+	for _, line := range strings.Split(out.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		cpu, _ := strconv.ParseFloat(fields[2], 64)
+		state := fields[3]
+		if len(state) > 0 {
+			state = state[:1]
+		}
+		rows[pid] = procRow{pid: pid, ppid: ppid, cpu: cpu, state: state}
+	}
+	return rows, nil
+}
+
+// buildChildMap groups the process table by parent PID.
+func buildChildMap(rows map[int]procRow) map[int][]int {
+	children := map[int][]int{}
+	for pid, row := range rows {
+		children[row.ppid] = append(children[row.ppid], pid)
+	}
+	return children
+}
+
+// GetPaneProcessInfo retrieves the current process info for a pane.
+// It sums CPU usage across the pane's shell AND all its descendants, so a
+// single-process pane (no shell wrapper) is still detected as active.
+func GetPaneProcessInfo(session, window string) (ProcessInfo, error) {
+	target := session + ":" + SafeWindowName(window)
+
+	out, err := runTmux("display-message", "-p", "-t", target, "#{pane_pid}")
+	if err != nil {
 		return ProcessInfo{}, err
 	}
-	pidStr := strings.TrimSpace(out.String())
-	shellPID, err := strconv.Atoi(pidStr)
+	shellPID, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		log.Printf("[TMUX-DEBUG] Failed to parse PID %s: %v", pidStr, err)
-		return ProcessInfo{}, err
+		return ProcessInfo{}, fmt.Errorf("parse pane PID %q: %w", out, err)
 	}
 
-	// Sum CPU of ALL descendants (shell -> agent -> agent's subprocesses)
-	// This captures total pane activity regardless of process tree shape
-	totalCPU := sumDescendantCPU(shellPID)
-	hasRunning := hasRunningDescendant(shellPID)
+	rows, err := snapshotProcesses()
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	children := buildChildMap(rows)
+
+	// Walk the subtree (including the shell itself) and aggregate CPU + a
+	// running flag. Using an iterative stack instead of recursion so an
+	// adversarial process loop (shouldn't happen, but ps under namespacing
+	// has produced cycles before) doesn't blow the call stack.
+	totalCPU := 0.0
+	hasRunning := false
+	stack := []int{shellPID}
+	visited := map[int]bool{}
+	for len(stack) > 0 {
+		n := len(stack) - 1
+		pid := stack[n]
+		stack = stack[:n]
+		if visited[pid] {
+			continue
+		}
+		visited[pid] = true
+		if row, ok := rows[pid]; ok {
+			totalCPU += row.cpu
+			if row.state == "R" {
+				hasRunning = true
+			}
+		}
+		stack = append(stack, children[pid]...)
+	}
 
 	state := "S"
 	if hasRunning {
 		state = "R"
 	}
-
-	log.Printf("[TMUX-DEBUG] Session=%s Window=%s ShellPID=%d totalCPU=%.2f state=%s",
-		session, window, shellPID, totalCPU, state)
-
 	return ProcessInfo{
 		PID:   shellPID,
 		CPU:   totalCPU,
 		State: state,
 	}, nil
-}
-
-// getChildPIDs returns the direct child PIDs of a process
-func getChildPIDs(pid int) []int {
-	cmd := exec.Command("pgrep", "-P", strconv.Itoa(pid))
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return nil
-	}
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	var pids []int
-	for _, line := range lines {
-		if p, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
-			pids = append(pids, p)
-		}
-	}
-	return pids
-}
-
-// sumDescendantCPU recursively sums CPU usage of all descendants of a process
-func sumDescendantCPU(pid int) float64 {
-	children := getChildPIDs(pid)
-	var total float64
-	for _, child := range children {
-		cpu, _ := getProcessMetrics(child)
-		total += cpu + sumDescendantCPU(child)
-	}
-	return total
-}
-
-// hasRunningDescendant checks if any descendant process is in Running state
-func hasRunningDescendant(pid int) bool {
-	children := getChildPIDs(pid)
-	for _, child := range children {
-		_, state := getProcessMetrics(child)
-		if state == "R" {
-			return true
-		}
-		if hasRunningDescendant(child) {
-			return true
-		}
-	}
-	return false
-}
-
-// getProcessMetrics retrieves CPU percentage and state for a process
-func getProcessMetrics(pid int) (float64, string) {
-	// Get CPU percentage and state using ps
-	// Use "=" suffix on format specifiers to suppress headers (works on macOS and Linux)
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "%cpu=", "-o", "state=")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		log.Printf("[TMUX-DEBUG] getProcessMetrics: ps failed for PID %d: %v", pid, err)
-		return 0, ""
-	}
-
-	line := strings.TrimSpace(out.String())
-	parts := strings.Fields(line)
-	if len(parts) < 2 {
-		log.Printf("[TMUX-DEBUG] getProcessMetrics: unexpected ps output for PID %d: %q", pid, line)
-		return 0, ""
-	}
-
-	cpu, _ := strconv.ParseFloat(parts[0], 64)
-	state := parts[1]
-	if len(state) > 0 {
-		state = string(state[0]) // Just the first character (R, S, D, etc.)
-	}
-
-	return cpu, state
 }

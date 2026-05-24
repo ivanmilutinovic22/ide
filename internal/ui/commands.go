@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,6 +16,33 @@ import (
 	"ide/internal/config"
 	"ide/internal/tmux"
 )
+
+// searchKeyBoundOnce gates the prefix+a tmux keybinding to a single
+// installation per process. The old code spawned a fresh goroutine for
+// it on every 500ms sessionsLoadedMsg tick, leaking goroutines (one per
+// tick) and burning a subprocess + an os.Executable() call each time.
+var searchKeyBoundOnce sync.Once
+
+// bindSearchKeyOnceCmd ensures the tmux popup binding is installed exactly
+// once per process. Subsequent calls are cheap no-ops.
+func bindSearchKeyOnceCmd() tea.Cmd {
+	return func() tea.Msg {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("bindSearchKey panic recovered: %v", r)
+			}
+		}()
+		searchKeyBoundOnce.Do(func() {
+			exe, err := os.Executable()
+			if err != nil {
+				log.Printf("bindSearchKey: os.Executable: %v", err)
+				return
+			}
+			tmux.BindSearchKey(exe)
+		})
+		return nil
+	}
+}
 
 type configLoadedMsg struct {
 	envs      []config.Environment
@@ -193,17 +221,6 @@ func createEnvironmentCmd(name, root string, windows []config.WindowTemplate) te
 			return environmentCreatedMsg{err: fmt.Errorf("root path is required")}
 		}
 
-		data, err := config.LoadAll()
-		if err != nil {
-			log.Printf("createEnvironment: ERROR loading config: %v", err)
-			return environmentCreatedMsg{err: err}
-		}
-		for _, env := range data.Environments {
-			if strings.EqualFold(strings.TrimSpace(env.Name), name) {
-				log.Printf("createEnvironment: environment %q already exists", name)
-				return environmentCreatedMsg{err: fmt.Errorf("environment %q already exists", name)}
-			}
-		}
 		if len(windows) == 0 {
 			windows = config.DefaultWindows()
 			log.Printf("createEnvironment: no windows provided, using defaults (%d windows)", len(windows))
@@ -217,8 +234,15 @@ func createEnvironmentCmd(name, root string, windows []config.WindowTemplate) te
 			Root:    root,
 			Windows: cloneWindowTemplates(windows),
 		}
-		data.Environments = append(data.Environments, newEnv)
-		if err := config.SaveAll(data); err != nil {
+		if err := config.Update(func(data *config.Data) error {
+			for _, env := range data.Environments {
+				if strings.EqualFold(strings.TrimSpace(env.Name), name) {
+					return fmt.Errorf("environment %q already exists", name)
+				}
+			}
+			data.Environments = append(data.Environments, newEnv)
+			return nil
+		}); err != nil {
 			log.Printf("createEnvironment: ERROR saving config: %v", err)
 			return environmentCreatedMsg{err: err}
 		}
@@ -252,42 +276,37 @@ func saveTemplateCmd(originalName, name string, windows []config.WindowTemplate)
 			return templateSavedMsg{err: fmt.Errorf("template must contain at least one window")}
 		}
 
-		data, err := config.LoadAll()
-		if err != nil {
-			return templateSavedMsg{err: err}
-		}
-
-		targetIdx := -1
-		if originalName != "" {
-			for i := range data.Templates {
-				if strings.EqualFold(strings.TrimSpace(data.Templates[i].Name), originalName) {
-					targetIdx = i
-					break
+		var edited bool
+		if err := config.Update(func(data *config.Data) error {
+			targetIdx := -1
+			if originalName != "" {
+				for i := range data.Templates {
+					if strings.EqualFold(strings.TrimSpace(data.Templates[i].Name), originalName) {
+						targetIdx = i
+						break
+					}
+				}
+				if targetIdx < 0 {
+					return fmt.Errorf("template %q not found", originalName)
 				}
 			}
-			if targetIdx < 0 {
-				return templateSavedMsg{err: fmt.Errorf("template %q not found", originalName)}
-			}
-		}
-
-		for i, existing := range data.Templates {
-			if strings.EqualFold(strings.TrimSpace(existing.Name), name) {
-				if targetIdx >= 0 && i == targetIdx {
-					continue
+			for i, existing := range data.Templates {
+				if strings.EqualFold(strings.TrimSpace(existing.Name), name) {
+					if targetIdx >= 0 && i == targetIdx {
+						continue
+					}
+					return fmt.Errorf("template %q already exists", name)
 				}
-				return templateSavedMsg{err: fmt.Errorf("template %q already exists", name)}
 			}
-		}
-
-		template := config.Template{Name: name, Windows: cloneWindowTemplates(windows)}
-		edited := targetIdx >= 0
-		if edited {
-			data.Templates[targetIdx] = template
-		} else {
-			data.Templates = append(data.Templates, template)
-		}
-
-		if err := config.SaveAll(data); err != nil {
+			template := config.Template{Name: name, Windows: cloneWindowTemplates(windows)}
+			edited = targetIdx >= 0
+			if edited {
+				data.Templates[targetIdx] = template
+			} else {
+				data.Templates = append(data.Templates, template)
+			}
+			return nil
+		}); err != nil {
 			return templateSavedMsg{err: err}
 		}
 
@@ -304,25 +323,25 @@ func saveEnvWindowsCmd(envName string, windows []config.WindowTemplate) tea.Cmd 
 		if len(windows) == 0 {
 			return envWindowsSavedMsg{envName: envName, err: fmt.Errorf("at least one window is required")}
 		}
-		data, err := config.LoadAll()
-		if err != nil {
-			return envWindowsSavedMsg{envName: envName, err: err}
-		}
-		idx := -1
-		for i := range data.Environments {
-			if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), envName) {
-				idx = i
-				break
+		var savedName string
+		if err := config.Update(func(data *config.Data) error {
+			idx := -1
+			for i := range data.Environments {
+				if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), envName) {
+					idx = i
+					break
+				}
 			}
-		}
-		if idx < 0 {
-			return envWindowsSavedMsg{envName: envName, err: fmt.Errorf("environment %q not found", envName)}
-		}
-		data.Environments[idx].Windows = cloneWindowTemplates(windows)
-		if err := config.SaveAll(data); err != nil {
+			if idx < 0 {
+				return fmt.Errorf("environment %q not found", envName)
+			}
+			data.Environments[idx].Windows = cloneWindowTemplates(windows)
+			savedName = data.Environments[idx].Name
+			return nil
+		}); err != nil {
 			return envWindowsSavedMsg{envName: envName, err: err}
 		}
-		return envWindowsSavedMsg{envName: data.Environments[idx].Name}
+		return envWindowsSavedMsg{envName: savedName}
 	}
 }
 
@@ -352,7 +371,11 @@ func restartSessionCmd(envName string) tea.Cmd {
 		if err := tmux.CheckTmuxExists(); err != nil {
 			return sessionRestartedMsg{envName: env.Name, session: session, err: err}
 		}
-		if tmux.HasSession(session) {
+		has, err := tmux.HasSession(session)
+		if err != nil {
+			return sessionRestartedMsg{envName: env.Name, session: session, err: err}
+		}
+		if has {
 			if err := tmux.KillSession(session); err != nil {
 				return sessionRestartedMsg{envName: env.Name, session: session, err: err}
 			}
@@ -386,25 +409,22 @@ func deleteTemplateCmd(name string) tea.Cmd {
 			return templateDeletedMsg{err: fmt.Errorf("template name is required")}
 		}
 
-		data, err := config.LoadAll()
-		if err != nil {
-			return templateDeletedMsg{err: err}
-		}
-
-		idx := -1
-		for i := range data.Templates {
-			if strings.EqualFold(strings.TrimSpace(data.Templates[i].Name), name) {
-				idx = i
-				break
+		var deletedName string
+		if err := config.Update(func(data *config.Data) error {
+			idx := -1
+			for i := range data.Templates {
+				if strings.EqualFold(strings.TrimSpace(data.Templates[i].Name), name) {
+					idx = i
+					break
+				}
 			}
-		}
-		if idx < 0 {
-			return templateDeletedMsg{err: fmt.Errorf("template %q not found", name)}
-		}
-
-		deletedName := data.Templates[idx].Name
-		data.Templates = append(data.Templates[:idx], data.Templates[idx+1:]...)
-		if err := config.SaveAll(data); err != nil {
+			if idx < 0 {
+				return fmt.Errorf("template %q not found", name)
+			}
+			deletedName = data.Templates[idx].Name
+			data.Templates = append(data.Templates[:idx], data.Templates[idx+1:]...)
+			return nil
+		}); err != nil {
 			return templateDeletedMsg{err: err}
 		}
 
@@ -414,36 +434,38 @@ func deleteTemplateCmd(name string) tea.Cmd {
 
 func deleteEnvironmentCmd(name string) tea.Cmd {
 	return func() tea.Msg {
-		data, err := config.LoadAll()
-		if err != nil {
-			return environmentDeletedMsg{err: err}
-		}
-
-		idx := -1
 		removed := config.Environment{}
-		for i := range data.Environments {
-			if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), strings.TrimSpace(name)) {
-				idx = i
-				removed = data.Environments[i]
-				break
+		if err := config.Update(func(data *config.Data) error {
+			idx := -1
+			for i := range data.Environments {
+				if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), strings.TrimSpace(name)) {
+					idx = i
+					removed = data.Environments[i]
+					break
+				}
 			}
-		}
-		if idx < 0 {
-			return environmentDeletedMsg{err: fmt.Errorf("environment %q not found", name)}
-		}
-
-		data.Environments = append(data.Environments[:idx], data.Environments[idx+1:]...)
-		if err := config.SaveAll(data); err != nil {
+			if idx < 0 {
+				return fmt.Errorf("environment %q not found", name)
+			}
+			data.Environments = append(data.Environments[:idx], data.Environments[idx+1:]...)
+			return nil
+		}); err != nil {
 			return environmentDeletedMsg{err: err}
 		}
 
 		session := tmux.SessionName(removed.Name)
 		killed := false
-		if tmux.CheckTmuxExists() == nil && tmux.HasSession(session) {
-			if err := tmux.KillSession(session); err != nil {
-				return environmentDeletedMsg{err: err}
+		if tmux.CheckTmuxExists() == nil {
+			has, hErr := tmux.HasSession(session)
+			if hErr != nil {
+				return environmentDeletedMsg{err: hErr}
 			}
-			killed = true
+			if has {
+				if err := tmux.KillSession(session); err != nil {
+					return environmentDeletedMsg{err: err}
+				}
+				killed = true
+			}
 		}
 
 		return environmentDeletedMsg{environment: removed.Name, session: session, killed: killed}
@@ -456,65 +478,58 @@ func moveWindowOrderCmd(envName, windowName string, direction int) tea.Cmd {
 			return windowMovedMsg{err: fmt.Errorf("direction must be non-zero")}
 		}
 
-		envs, err := config.Load()
-		if err != nil {
-			return windowMovedMsg{err: err}
-		}
-
-		envIdx := -1
-		for i := range envs {
-			if strings.EqualFold(strings.TrimSpace(envs[i].Name), strings.TrimSpace(envName)) {
-				envIdx = i
-				break
+		var sourceWindow, destinationWindow, resolvedEnvName string
+		if err := config.Update(func(data *config.Data) error {
+			envIdx := -1
+			for i := range data.Environments {
+				if strings.EqualFold(strings.TrimSpace(data.Environments[i].Name), strings.TrimSpace(envName)) {
+					envIdx = i
+					break
+				}
 			}
-		}
-		if envIdx < 0 {
-			return windowMovedMsg{err: fmt.Errorf("environment %q not found", envName)}
-		}
-
-		env := &envs[envIdx]
-		if len(env.Windows) < 2 {
-			return windowMovedMsg{err: fmt.Errorf("environment %q has fewer than 2 windows", env.Name)}
-		}
-
-		targetWindow := tmux.SafeWindowName(windowName)
-		sourceIdx := -1
-		for i := range env.Windows {
-			if tmux.SafeWindowName(env.Windows[i].Name) == targetWindow {
-				sourceIdx = i
-				break
+			if envIdx < 0 {
+				return fmt.Errorf("environment %q not found", envName)
 			}
-		}
-		if sourceIdx < 0 {
-			return windowMovedMsg{err: fmt.Errorf("window %q not found in template", windowName)}
-		}
-
-		destinationIdx := sourceIdx + direction
-		if destinationIdx < 0 || destinationIdx >= len(env.Windows) {
-			if direction < 0 {
-				return windowMovedMsg{err: fmt.Errorf("window is already first")}
+			env := &data.Environments[envIdx]
+			if len(env.Windows) < 2 {
+				return fmt.Errorf("environment %q has fewer than 2 windows", env.Name)
 			}
-			return windowMovedMsg{err: fmt.Errorf("window is already last")}
-		}
-
-		sourceWindow := tmux.SafeWindowName(env.Windows[sourceIdx].Name)
-		destinationWindow := tmux.SafeWindowName(env.Windows[destinationIdx].Name)
-		env.Windows[sourceIdx], env.Windows[destinationIdx] = env.Windows[destinationIdx], env.Windows[sourceIdx]
-
-		if err := config.Save(envs); err != nil {
+			targetWindow := tmux.SafeWindowName(windowName)
+			sourceIdx := -1
+			for i := range env.Windows {
+				if tmux.SafeWindowName(env.Windows[i].Name) == targetWindow {
+					sourceIdx = i
+					break
+				}
+			}
+			if sourceIdx < 0 {
+				return fmt.Errorf("window %q not found in template", windowName)
+			}
+			destinationIdx := sourceIdx + direction
+			if destinationIdx < 0 || destinationIdx >= len(env.Windows) {
+				if direction < 0 {
+					return fmt.Errorf("window is already first")
+				}
+				return fmt.Errorf("window is already last")
+			}
+			sourceWindow = tmux.SafeWindowName(env.Windows[sourceIdx].Name)
+			destinationWindow = tmux.SafeWindowName(env.Windows[destinationIdx].Name)
+			env.Windows[sourceIdx], env.Windows[destinationIdx] = env.Windows[destinationIdx], env.Windows[sourceIdx]
+			resolvedEnvName = env.Name
+			return nil
+		}); err != nil {
 			return windowMovedMsg{err: err}
 		}
 
 		var sessionErr error
-		session := tmux.SessionName(env.Name)
-		if tmux.HasSession(session) {
-			proc := exec.Command("tmux", "swap-window", "-s", session+":"+sourceWindow, "-t", session+":"+destinationWindow)
-			if err := proc.Run(); err != nil {
+		session := tmux.SessionName(resolvedEnvName)
+		if has, _ := tmux.HasSession(session); has {
+			if err := tmux.SwapWindow(session, sourceWindow, destinationWindow); err != nil {
 				sessionErr = fmt.Errorf("swap live tmux windows: %w", err)
 			}
 		}
 
-		return windowMovedMsg{envName: env.Name, direction: direction, sessionErr: sessionErr}
+		return windowMovedMsg{envName: resolvedEnvName, direction: direction, sessionErr: sessionErr}
 	}
 }
 
@@ -540,7 +555,7 @@ func prepareAttachCmd(env config.Environment, windowName string) tea.Cmd {
 			}
 			log.Printf("prepareAttach: hasWindow(%q)=%v", windowName, hasWindow)
 			if hasWindow {
-				_ = exec.Command("tmux", "select-window", "-t", target).Run()
+				_ = tmux.SelectWindow(target)
 			} else {
 				log.Printf("prepareAttach: window %q not found, falling back to session root", windowName)
 				target = session
@@ -565,7 +580,11 @@ func capturePaneCmd(session, window string) tea.Cmd {
 		if err != nil || cols <= 0 || rows <= 0 {
 			return panePreviewMsg{session: session, window: window, process: process}
 		}
-		raw, _ := tmux.CapturePane(session, window)
+		raw, err := tmux.CapturePane(session, window)
+		if err != nil {
+			log.Printf("capturePane: %v", err)
+			return panePreviewMsg{session: session, window: window, process: process}
+		}
 		em := vt.NewEmulator(cols, rows)
 		// tmux capture-pane writes bare LFs as line separators (no kernel tty
 		// in the loop to add CRs). Flip ANSI mode 20 (LNM) on so LF resets

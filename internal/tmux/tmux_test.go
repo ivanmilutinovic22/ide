@@ -6,6 +6,30 @@ import (
 	"testing"
 )
 
+func TestBuildChildMap(t *testing.T) {
+	rows := map[int]procRow{
+		100: {pid: 100, ppid: 1, cpu: 0.1},
+		200: {pid: 200, ppid: 100, cpu: 5.0},
+		300: {pid: 300, ppid: 100, cpu: 10.0},
+		400: {pid: 400, ppid: 200, cpu: 1.0},
+	}
+	got := buildChildMap(rows)
+	wantParents := []int{1, 100, 200}
+	for _, p := range wantParents {
+		if _, ok := got[p]; !ok {
+			t.Errorf("expected entry for parent %d", p)
+		}
+	}
+	// 100 has two direct children
+	if len(got[100]) != 2 {
+		t.Errorf("expected 100 to have 2 children, got %d", len(got[100]))
+	}
+	// 400 is a leaf
+	if _, ok := got[400]; ok {
+		t.Errorf("400 should be a leaf, but appeared as a parent")
+	}
+}
+
 func TestSessionName(t *testing.T) {
 	tests := []struct {
 		name string
