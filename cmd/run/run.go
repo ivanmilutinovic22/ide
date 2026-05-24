@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"ide/internal/cli"
 	"ide/run"
 )
 
@@ -20,12 +21,19 @@ Usage:
   ide --search     Open the fuzzy-search popup (used by tmux prefix+a)
   ide --help       Show this message
   ide --version    Print the version
-`
+
+` + cli.Usage
 
 // Dispatch parses argv and runs the matching subcommand. Returns a process
 // exit code.
 func Dispatch() int {
 	args := os.Args[1:]
+
+	// Route CLI subcommands (env, template, ...) before treating args as TUI
+	// flags. This lets `ide env list` etc. coexist with `ide --search`.
+	if len(args) > 0 && cli.Subcommands[args[0]] {
+		return cli.Dispatch(args)
+	}
 
 	// Peel off recognized flags. Anything else is an error so users learn
 	// about typos instead of silently getting the default behavior.
