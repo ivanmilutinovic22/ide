@@ -6,8 +6,7 @@ A terminal UI for managing **tmux**-based development environments.
 the windows you want open, the commands they run — and `ide` handles spinning up the right `tmux` session, attaching to
 it, and showing you what's running across every project at a glance.
 
-> **Note:** `ide` is a frontend for `tmux`, not a replacement. `tmux` 3.2+ must be installed and on your `PATH` —
-> without it, `ide` will not run.
+
 
 ![ide screenshot](./docs/images/screenshot.png)
 
@@ -38,22 +37,6 @@ working directory — and from then on, hitting `enter` brings the whole layout 
 a shell can be a window: editors, dev servers, build watchers, log tails, REPLs, agents, docker compose,
 port-forwards, you name it.
 
-A typical environment for a Go service might look like:
-
-```
-editor       nvim .
-server       air                              (cwd: cmd/server)
-test         watchexec -e go go test ./...
-db           psql $DATABASE_URL
-logs         tail -f logs/dev.log
-agent [ai]   claude
-```
-
-After a command exits the window stays open with an interactive shell, so a crash doesn't take the window
-with it. `r r` rebuilds the whole environment from scratch when you change the config or just want a
-fresh slate.
-
----
 
 ## AI agent support
 
@@ -96,11 +79,9 @@ between them so you can hop to whichever agent finished first.
 ```bash
 git clone https://github.com/<your-user>/ide.git
 cd ide
-go build -o ide .
-mv ide ~/.local/bin/   # or anywhere on your PATH
+make build
+mv ./build/ide ~/.local/bin/   # or anywhere on your PATH
 ```
-
-`make build` produces the same binary at `./build/ide`.
 
 ### Verifying tmux
 
@@ -114,11 +95,11 @@ tmux -V    # should print 3.2 or higher
 
 1. Run `ide` in your terminal. On first launch it creates an empty config at `~/.config/ide/environments.json` (or
    `$XDG_CONFIG_HOME/ide/environments.json`) and seeds it with a few built-in templates.
-2. Press **`a`** to create your first environment. Give it a name, point it at a project root, and pick a template (or
+2. Press **`c`** to create your first environment. Give it a name, point it at a project root, and pick a template (or
    skip the template to start with a single shell window).
 3. Press **`enter`** on the new environment to attach. `ide` creates the `tmux` session, opens the windows you defined,
    and drops you in.
-4. Detach the way you always do (`Ctrl-b d` by default) — your session keeps running. Re-launch `ide` and you'll see it
+4. Detach the way you always do (`tmux leader +  d` by default) — your session keeps running. Re-launch `ide` and you'll see it
    in the **Sessions** pane with an **`[↑]`** marker.
 
 ---
@@ -139,49 +120,6 @@ The config file is plain JSON. You can edit it directly or use the UI.
 
 Press **`?`** at any time for the in-app shortcuts overlay. Highlights:
 
-### Global
-
-| Keys            | Action                               |
-| --------------- | ------------------------------------ |
-| `1` / `2` / `3` | Focus Sessions / Windows / Templates |
-| `Tab`           | Cycle panels                         |
-| `Ctrl+P`        | Fuzzy search across all windows      |
-| `Ctrl+T`        | Theme picker                         |
-| `n` / `N`       | Jump to next / previous AI window    |
-| `r`             | Refresh sessions                     |
-| `?`             | Toggle shortcuts overlay             |
-| `q` / `Ctrl+C`  | Quit                                 |
-
-### Sessions pane
-
-| Keys      | Action                                   |
-| --------- | ---------------------------------------- |
-| `j` / `k` | Move selection                           |
-| `Enter`   | Attach to session (creates it if needed) |
-| `a`       | Create environment                       |
-| `e`       | Edit selected environment                |
-| `r r`     | Restart session (kill + recreate)        |
-| `T`       | Save current windows as a template       |
-| `d d`     | Delete environment (config only)         |
-| `x x`     | Kill `tmux` session                      |
-
-### Windows pane
-
-| Keys      | Action                                  |
-| --------- | --------------------------------------- |
-| `h` / `l` | Move selection                          |
-| `Enter`   | Open the window in an embedded terminal |
-| `H` / `L` | Reorder windows                         |
-| `Ctrl+Q`  | Exit embedded terminal                  |
-
-### Templates pane
-
-| Keys          | Action          |
-| ------------- | --------------- |
-| `j` / `k`     | Move selection  |
-| `a`           | New template    |
-| `e` / `Enter` | Edit template   |
-| `d d`         | Delete template |
 
 ### Inside `tmux`
 
