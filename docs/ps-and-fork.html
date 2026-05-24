@@ -460,7 +460,94 @@ walk(shellPID, rows, children)    // no syscalls</pre>
   <p><code>ps -A</code> dumps every process on the system — typically a few hundred lines. Parsing that in Go is a tight loop over a byte buffer: trivial compared to one <code>fork</code>. Trading one expensive syscall for ~500 cheap field-parses is always a win.</p>
 </div>
 
-<h2>6 · Recap</h2>
+<h2>6 · Why not filter <span class="mono">ps</span> directly, or pipe to <span class="mono">grep</span>?</h2>
+
+<p>A natural reaction to &ldquo;<code>ps -A</code> returns the whole system table&rdquo; is: can&rsquo;t we just ask for the rows we care about? Sometimes yes — but not here. The reason is a chicken-and-egg in how Unix stores parent/child relationships.</p>
+
+<h3>What you <em>can</em> do</h3>
+
+<p><code>ps</code> takes a PID list:</p>
+
+<pre>ps -p 54321,54322,54323 -o pid=,ppid=,%cpu=,state=</pre>
+
+<p>One fork, tiny output, exactly the rows you wanted.</p>
+
+<h3>Why it doesn&rsquo;t work for us</h3>
+
+<p>You have to know the PIDs upfront. We only know <em>one</em>: the pane&rsquo;s shell PID from <code>tmux display-message -p #{pane_pid}</code>. The whole job is to discover the descendants. Catch-22:</p>
+
+<div class="callout warn">
+  <h4>The dependency cycle</h4>
+  <ul style="margin:4px 0;">
+    <li>To filter <code>ps</code> → need descendant PIDs.</li>
+    <li>To get descendant PIDs → need to walk parent→child edges.</li>
+    <li>To walk edges → need <code>ps</code> output.</li>
+  </ul>
+</div>
+
+<p>The kernel has no &ldquo;give me PID X and all its descendants&rdquo; syscall. The parent/child relationship is stored <em>backwards</em>: every process records its <code>ppid</code>, but no process stores a list of its children. To assemble a subtree you either:</p>
+
+<ul>
+  <li>Start at X, ask &ldquo;who has <code>ppid</code>=X?&rdquo;, recurse. That&rsquo;s <code>pgrep -P X</code> called repeatedly — the old fork-bomb code.</li>
+  <li>Or dump every row once and invert the index in memory — the current approach.</li>
+</ul>
+
+<h3>Why <span class="mono">grep</span> doesn&rsquo;t rescue this</h3>
+
+<pre>ps -A | grep 54321</pre>
+
+<p>Two problems:</p>
+
+<ul>
+  <li>It filters <em>text</em>. You&rsquo;d get the row with <code>pid=54321</code>, plus anything that happens to contain &ldquo;54321&rdquo; in its command line — false matches galore.</li>
+  <li>More importantly, it doesn&rsquo;t reveal which other rows are descendants. To find children you&rsquo;d grep for <code>ppid=54321</code>, then for each match grep again, recursively. Same fork loop, plus a <code>grep</code> per level. Worse than the original.</li>
+</ul>
+
+<h3>The trade-off, side by side</h3>
+
+<table>
+  <tr>
+    <th>approach</th>
+    <th>forks per poll</th>
+    <th>data transferred</th>
+    <th>catch</th>
+  </tr>
+  <tr>
+    <td class="k">ps -p &lt;known PIDs&gt;</td>
+    <td class="num">1</td>
+    <td>tiny</td>
+    <td>requires knowing the PIDs first</td>
+  </tr>
+  <tr>
+    <td class="k">pgrep -P, recursively</td>
+    <td class="num">O(tree size)</td>
+    <td>tiny each</td>
+    <td>fork-bomb (the bug)</td>
+  </tr>
+  <tr>
+    <td class="k">ps -A | grep</td>
+    <td class="num">2 + recursion</td>
+    <td>tiny each</td>
+    <td>text matching, still recursive</td>
+  </tr>
+  <tr>
+    <td class="k">ps -A once, walk in Go</td>
+    <td class="num">1</td>
+    <td>~500 rows</td>
+    <td>what we do</td>
+  </tr>
+</table>
+
+<p>Trading a few hundred parsed lines for one <code>fork</code> beats trading zero wasted lines for N forks. The &ldquo;wasted&rdquo; parsing happens in the same Go process, in a tight loop over a byte buffer, on a hot CPU cache. That&rsquo;s not real work.</p>
+
+<h3>Where this <em>would</em> be different</h3>
+
+<div class="callout">
+  <h4>Linux has a shortcut macOS doesn&rsquo;t</h4>
+  <p>On Linux you can read <code>/proc/&lt;pid&gt;/task/&lt;pid&gt;/children</code> — a kernel-maintained list of direct children, no <code>ps</code>, no fork. Walking the tree becomes a series of file reads. macOS has no <code>/proc</code>, so portable code uses <code>ps -A</code> instead.</p>
+</div>
+
+<h2>7 · Recap</h2>
 
 <ul>
   <li><code>fork()</code> + <code>exec()</code> is the only way to start another program on Unix. The fork is the &ldquo;make a throwaway copy&rdquo; step; the exec is &ldquo;replace that copy with the target binary.&rdquo;</li>
