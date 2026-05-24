@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"log"
-	"time"
 
 	"ide/internal/agentstatus"
 	"ide/internal/config"
@@ -136,70 +135,6 @@ func (m Model) getSessionAgentStatus(env config.Environment) AgentStatus {
 		}
 	}
 	return highest
-}
-
-// updateWindowProcessInfo updates the process info and status for a window
-func (m *Model) updateWindowProcessInfo(session, window string) {
-	log.Printf("[updateWindowProcessInfo] Starting check for session=%s window=%s", session, window)
-	env, ok := m.currentEnv()
-	if !ok {
-		return
-	}
-
-	currentCmd := tmux.CurrentProcess(session, window)
-	if !m.isAIWindow(env, window, currentCmd) {
-		return
-	}
-
-	// Get current process info from tmux
-	procInfo, err := tmux.GetPaneProcessInfo(session, window)
-	if err != nil {
-		return
-	}
-
-	log.Printf("[updateWindowProcessInfo] Got procInfo: PID=%d CPU=%.2f State=%s", procInfo.PID, procInfo.CPU, procInfo.State)
-
-	key := windowKey(session, window)
-	current := ProcessInfo{
-		PID:       procInfo.PID,
-		CPU:       procInfo.CPU,
-		State:     procInfo.State,
-		Timestamp: time.Now(),
-	}
-
-	// Get previous info and current tracking state
-	var previous ProcessInfo
-	var currentStatus AgentStatus
-	var lowActivityCount int
-	var baselineCPU float64
-	var sampleCount int
-	if existing, ok := m.windowProcessInfo[key]; ok {
-		previous = existing.Current
-		currentStatus = existing.Status
-		lowActivityCount = existing.LowActivityCount
-		baselineCPU = existing.BaselineCPU
-		sampleCount = existing.SampleCount
-	}
-
-	log.Printf("[updateWindowProcessInfo] Current tracking state: status=%s baselineCPU=%.2f sampleCount=%d", currentStatus, baselineCPU, sampleCount)
-
-	// Detect status with hysteresis and adaptive baseline
-	status, newLowActivityCount, newBaselineCPU, newSampleCount := detectAgentStatus(
-		current, currentStatus, lowActivityCount, baselineCPU, sampleCount,
-	)
-
-	log.Printf("[updateWindowProcessInfo] Detected new status: %s", status)
-
-	// Update tracking
-	m.windowProcessInfo[key] = WindowProcessInfo{
-		Current:          current,
-		Previous:         previous,
-		Status:           status,
-		LowActivityCount: newLowActivityCount,
-		BaselineCPU:      newBaselineCPU,
-		SampleCount:      newSampleCount,
-		Command:          currentCmd,
-	}
 }
 
 // updateWindowProcessInfoFromMsg updates the process info from an agentStatusUpdateMsg

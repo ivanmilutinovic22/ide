@@ -107,23 +107,18 @@ func Detect(current ProcessInfo, currentStatus Status, lowActivityCount int, bas
 	if effectiveBaseline*1.3 > cookingThreshold {
 		cookingThreshold = effectiveBaseline * 1.3
 	}
-	cpuElevated := current.CPU > cookingThreshold
-	isHighActivity := cpuElevated
-	isLowActivity := current.CPU <= cookingThreshold
+	isHighActivity := current.CPU > cookingThreshold
 
 	switch currentStatus {
 	case StatusCooking:
 		if isHighActivity {
 			return StatusCooking, 0, baselineCPU, sampleCount
 		}
-		if isLowActivity {
-			newCount := lowActivityCount + 1
-			if newCount >= 3 {
-				return StatusAwaitingInput, 0, baselineCPU, sampleCount
-			}
-			return StatusCooking, newCount, baselineCPU, sampleCount
+		newCount := lowActivityCount + 1
+		if newCount >= 3 {
+			return StatusAwaitingInput, 0, baselineCPU, sampleCount
 		}
-		return StatusCooking, lowActivityCount, baselineCPU, sampleCount
+		return StatusCooking, newCount, baselineCPU, sampleCount
 
 	case StatusAwaitingInput, StatusIdle:
 		if isHighActivity {
