@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"ide/internal/config"
+	"ide/internal/layout"
 	"ide/internal/tmux"
 )
 
@@ -23,16 +24,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		if m.terminalMode && m.embeddedTerm != nil {
 			_, rightWidth := splitPaneWidths(m.width - 1)
-			contentWidth := paneContentWidth(rightWidth)
-			bodyHeight := m.height - 2
-			if bodyHeight < 1 {
-				bodyHeight = 1
-			}
-			previewHeight := bodyHeight - 4
-			if previewHeight < 1 {
-				previewHeight = 1
-			}
-			m.embeddedTerm.Resize(contentWidth, previewHeight)
+			m.embeddedTerm.Resize(paneContentWidth(rightWidth), layout.TerminalPreviewHeight(m.height))
 		}
 		return m, nil
 
@@ -236,8 +228,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "No environments configured in " + path
 			}
-		} else if strings.HasPrefix(m.status, "Loading") || strings.HasPrefix(m.status, "Refreshing") || strings.HasPrefix(m.status, "No environments configured") {
+			m.statusKind = statusKindEmpty
+		} else if m.statusKind.replaceableOnLoad() ||
+			strings.HasPrefix(m.status, "Loading") ||
+			strings.HasPrefix(m.status, "Refreshing") ||
+			strings.HasPrefix(m.status, "No environments configured") {
 			m.status = "Ready. Enter attaches, Ctrl-b d detaches back here."
+			m.statusKind = statusKindReady
 		}
 		return m, nil
 
@@ -278,14 +275,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.rebuildFuzzyIndex()
-		// Ensure search keybinding is set for tmux popup
-		go func() {
-			if exe, err := os.Executable(); err == nil {
-				tmux.BindSearchKey(exe)
-			}
-		}()
 		m.normalizeSelection()
-		return m, m.captureCurrentWindowCmd()
+		// bindSearchKeyOnceCmd is a sync.Once-guarded no-op after the first call.
+		// We batch it onto the normal capture command so we don't spawn an
+		// extra goroutine per tick.
+		return m, tea.Batch(m.captureCurrentWindowCmd(), bindSearchKeyOnceCmd())
 
 	case panePreviewMsg:
 		m.previewContent = msg.content
@@ -335,17 +329,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		session := tmux.SessionName(env.Name)
-		// Add to sessions map immediately so enterTerminalMode finds it
+		// Add to sessions map immediately so enterTerminalMode finds it.
+		// sessionWindows will populate asynchronously via the loadSessionsCmd
+		// batched below — avoids a synchronous tmux subprocess call in Update.
 		m.sessions[session] = struct{}{}
-		// Also populate sessionWindows
-		if wl, err := tmux.ListWindows(session); err == nil {
-			m.sessionWindows[session] = wl
-		}
 		// The fuzzy cache snapshots `Running` per env; without this rebuild
 		// it would still report the freshly-started session as not-running
 		// until the next 500ms loadSessionsCmd tick.
 		m.rebuildFuzzyIndex()
-		return m.enterTerminalMode()
+		model, enterCmd := m.enterTerminalMode()
+		return model, tea.Batch(enterCmd, loadSessionsCmd())
 
 	case previewTickMsg:
 		return m, tea.Batch(m.captureCurrentWindowCmd(), loadSessionsCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
@@ -532,18 +525,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func clampSelection(current, delta, count int) int {
+// clampIndex bounds idx to [0, count-1]; returns 0 when count <= 0.
+func clampIndex(idx, count int) int {
 	if count <= 0 {
 		return 0
 	}
-	next := current + delta
-	if next < 0 {
+	if idx < 0 {
 		return 0
 	}
-	if next >= count {
+	if idx >= count {
 		return count - 1
 	}
-	return next
+	return idx
+}
+
+func clampSelection(current, delta, count int) int {
+	return clampIndex(current+delta, count)
 }
 
 func (m *Model) moveEnv(delta int) {
@@ -637,7 +634,7 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "d":
 		return m.startDeleteEnvironment()
 	case "left", "right", "h", "l":
-		m.status = "[1] Sessions panel focused"
+		// no-op: h/l have no meaning in the sessions panel
 		return m, nil
 	case "H", "L":
 		m.status = "Window reorder is available in [2] Windows panel"
@@ -745,7 +742,7 @@ func (m Model) updateTemplatesPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "d":
 		return m.startDeleteTemplate()
 	case "left", "right", "h", "l":
-		m.status = "[3] Templates panel focused"
+		// no-op: h/l have no meaning in the templates panel
 		return m, nil
 	case "x":
 		m.status = "Session kill is available in [1] Sessions panel"
@@ -756,17 +753,7 @@ func (m Model) updateTemplatesPanelKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) moveTemplate(delta int) {
-	if len(m.templates) == 0 {
-		m.selectedTemplate = 0
-		return
-	}
-	m.selectedTemplate += delta
-	if m.selectedTemplate < 0 {
-		m.selectedTemplate = 0
-	}
-	if m.selectedTemplate >= len(m.templates) {
-		m.selectedTemplate = len(m.templates) - 1
-	}
+	m.selectedTemplate = clampSelection(m.selectedTemplate, delta, len(m.templates))
 }
 
 func (m Model) currentTemplate() (config.Template, bool) {
@@ -1204,50 +1191,10 @@ func (m Model) isCreateLastField() bool {
 }
 
 func (m *Model) normalizeSelection() {
-	if len(m.environments) == 0 {
-		m.selectedEnv = 0
-		m.selectedWindow = 0
-	} else {
-		if m.selectedEnv >= len(m.environments) {
-			m.selectedEnv = len(m.environments) - 1
-		}
-		if m.selectedEnv < 0 {
-			m.selectedEnv = 0
-		}
-		wins := m.currentWindowNames()
-		if len(wins) == 0 {
-			m.selectedWindow = 0
-		} else {
-			if m.selectedWindow >= len(wins) {
-				m.selectedWindow = len(wins) - 1
-			}
-			if m.selectedWindow < 0 {
-				m.selectedWindow = 0
-			}
-		}
-	}
-
-	if len(m.templates) == 0 {
-		m.selectedTemplate = 0
-	} else {
-		if m.selectedTemplate >= len(m.templates) {
-			m.selectedTemplate = len(m.templates) - 1
-		}
-		if m.selectedTemplate < 0 {
-			m.selectedTemplate = 0
-		}
-	}
-
-	if n := len(m.agentItems()); n == 0 {
-		m.selectedAgent = 0
-	} else {
-		if m.selectedAgent >= n {
-			m.selectedAgent = n - 1
-		}
-		if m.selectedAgent < 0 {
-			m.selectedAgent = 0
-		}
-	}
+	m.selectedEnv = clampIndex(m.selectedEnv, len(m.environments))
+	m.selectedWindow = clampIndex(m.selectedWindow, len(m.currentWindowNames()))
+	m.selectedTemplate = clampIndex(m.selectedTemplate, len(m.templates))
+	m.selectedAgent = clampIndex(m.selectedAgent, len(m.agentItems()))
 }
 
 func (m Model) currentEnv() (config.Environment, bool) {

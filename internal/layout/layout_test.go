@@ -88,6 +88,25 @@ func TestSplitLeftPaneHeights(t *testing.T) {
 	}
 }
 
+func TestTerminalPreviewHeight(t *testing.T) {
+	tests := []struct {
+		height, want int
+	}{
+		{0, 1},   // floored
+		{5, 1},   // floored after reservation
+		{6, 1},
+		{7, 1},
+		{8, 2},
+		{20, 14},
+		{50, 44},
+	}
+	for _, tc := range tests {
+		if got := TerminalPreviewHeight(tc.height); got != tc.want {
+			t.Errorf("TerminalPreviewHeight(%d) = %d, want %d", tc.height, got, tc.want)
+		}
+	}
+}
+
 // TestSplitPaneWidthsSums verifies left+right == total once total is wide
 // enough that both panes can satisfy their 1-col floor (>=2). At very narrow
 // widths each pane is clamped to 1, which can exceed the requested total.

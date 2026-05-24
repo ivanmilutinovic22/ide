@@ -67,3 +67,13 @@ func usagef(w io.Writer, format string, a ...any) int {
 	fmt.Fprintf(w, format+"\n", a...)
 	return 2
 }
+
+// parseUsagef writes the parse error followed by the usage string so callers
+// see "ide: unknown flag --rooot" before the usage hint.
+func parseUsagef(w io.Writer, err error, format string, a ...any) int {
+	if err != nil {
+		fmt.Fprintf(w, "ide: %s\n", err.Error())
+	}
+	fmt.Fprintf(w, format+"\n", a...)
+	return 2
+}

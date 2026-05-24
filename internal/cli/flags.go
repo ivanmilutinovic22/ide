@@ -6,6 +6,22 @@ import (
 	"strings"
 )
 
+// parseError wraps an error from splitArgs/flag.Parse with the raw stderr
+// the FlagSet would have printed. Used by callers to surface a useful hint
+// in the "usage:" line instead of a generic blob.
+type parseError struct {
+	err    error
+	stderr string
+}
+
+func (p *parseError) Error() string {
+	if p.stderr != "" {
+		return strings.TrimSpace(p.stderr)
+	}
+	return p.err.Error()
+}
+func (p *parseError) Unwrap() error { return p.err }
+
 // flagSet wraps flag.FlagSet with two extras: a record of which flags were
 // actually passed (so `set` commands can tell "omitted" from "empty"), and
 // a pre-parser that lets positionals appear anywhere in the argv (stdlib
@@ -15,12 +31,14 @@ type flagSet struct {
 	seen     map[string]bool
 	posArgs  []string
 	knownVal map[string]bool // names of flags that take a value
+	sink     *stderrSink
 }
 
 func newFlagSet(name string) *flagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderrSink{})
-	return &flagSet{fs: fs, knownVal: map[string]bool{}}
+	sink := &stderrSink{}
+	fs.SetOutput(sink)
+	return &flagSet{fs: fs, knownVal: map[string]bool{}, sink: sink}
 }
 
 func (f *flagSet) string(name, usage string) *string {
@@ -33,11 +51,11 @@ func (f *flagSet) string(name, usage string) *string {
 func (f *flagSet) parse(args []string) error {
 	flagToks, pos, err := splitArgs(args, f.knownVal)
 	if err != nil {
-		return err
+		return &parseError{err: err}
 	}
 	f.posArgs = pos
 	if err := f.fs.Parse(flagToks); err != nil {
-		return err
+		return &parseError{err: err, stderr: f.sink.buf.String()}
 	}
 	f.seen = map[string]bool{}
 	f.fs.Visit(func(fl *flag.Flag) { f.seen[fl.Name] = true })
@@ -85,9 +103,11 @@ func splitArgs(args []string, known map[string]bool) (flagToks, pos []string, er
 	return
 }
 
-// stderrSink silences flag's default error printer; we render our own.
-type stderrSink struct{}
+// stderrSink captures flag's default error output so callers can surface
+// the actual error text ("flag provided but not defined: -rooot") instead
+// of a generic usage blob.
+type stderrSink struct{ buf strings.Builder }
 
-func (stderrSink) Write(p []byte) (int, error) { return len(p), nil }
+func (s *stderrSink) Write(p []byte) (int, error) { return s.buf.Write(p) }
 
 func trim(s string) string { return strings.TrimSpace(s) }

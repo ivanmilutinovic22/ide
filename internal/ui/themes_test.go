@@ -129,10 +129,13 @@ func TestThemeIndexByName(t *testing.T) {
 		}
 	})
 
-	t.Run("unknown name returns false", func(t *testing.T) {
-		_, ok := m.themeIndexByName("definitely-not-a-real-theme-name-zzz")
+	t.Run("unknown name returns -1, false", func(t *testing.T) {
+		idx, ok := m.themeIndexByName("definitely-not-a-real-theme-name-zzz")
 		if ok {
 			t.Errorf("expected ok=false for unknown name")
+		}
+		if idx != -1 {
+			t.Errorf("expected idx=-1 for unknown name, got %d", idx)
 		}
 	})
 
@@ -157,10 +160,13 @@ func TestThemeIndexByName(t *testing.T) {
 		}
 	})
 
-	t.Run("empty name returns false", func(t *testing.T) {
-		_, ok := m.themeIndexByName("")
+	t.Run("empty name returns -1, false", func(t *testing.T) {
+		idx, ok := m.themeIndexByName("")
 		if ok {
 			t.Errorf("expected ok=false for empty name")
+		}
+		if idx != -1 {
+			t.Errorf("expected idx=-1 for empty name, got %d", idx)
 		}
 	})
 }

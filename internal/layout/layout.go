@@ -144,6 +144,22 @@ func SplitLeftPaneHeights(total, agentCount, templateCount int) (sessions, agent
 	return sessions, agents, templates
 }
 
+// TerminalPreviewHeight returns the rows available for embedded-terminal
+// content given the model's total `height`. Reserves rows for the status
+// bar / separator and the pane title + tabs row + spacer above the
+// terminal area. Floored at 1.
+func TerminalPreviewHeight(height int) int {
+	bodyHeight := height - 2
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	previewHeight := bodyHeight - 4
+	if previewHeight < 1 {
+		previewHeight = 1
+	}
+	return previewHeight
+}
+
 // ViewportSlice returns the visible slice of rows for a scrollable list
 // where `selected` is the cursor index and `maxVisible` is the row capacity.
 // The slice always includes the selected row when one fits.

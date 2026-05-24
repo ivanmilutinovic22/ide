@@ -84,6 +84,36 @@ const (
 
 const focusPaneCount = 4
 
+// statusKind categorises the message in m.status so the view layer can
+// suppress chatty transitional text without resorting to prefix matching
+// on the rendered string.
+type statusKind int
+
+const (
+	statusKindGeneric  statusKind = iota // default — show as-is
+	statusKindLoading                    // "Loading..." / "Refreshing..." — replace once data lands
+	statusKindEmpty                      // "No environments configured..." — replace once data lands
+	statusKindReady                      // hint shown once everything is loaded; suppress from status bar
+	statusKindFocus                      // "Focused [s] Sessions panel" — suppress; the panel border conveys focus
+	statusKindOverlay                    // "Shortcuts open." / "Theme picker open." — suppress; user can see the overlay
+)
+
+// suppressible reports whether messages of this kind should be hidden from
+// the status bar in favour of contextual hints.
+func (s statusKind) suppressible() bool {
+	switch s {
+	case statusKindReady, statusKindFocus, statusKindOverlay:
+		return true
+	}
+	return false
+}
+
+// replaceableOnLoad reports whether a status message should be overwritten
+// when fresh config data arrives.
+func (s statusKind) replaceableOnLoad() bool {
+	return s == statusKindLoading || s == statusKindEmpty
+}
+
 const (
 	templateFieldName = iota
 	templateFieldWindows
@@ -201,6 +231,7 @@ type Model struct {
 	themes                []uiTheme
 	themeIndex            int
 	status                string
+	statusKind            statusKind // categorises the status string for display logic
 	previewContent        string
 	previewSession        string
 	previewWindow         string
@@ -232,6 +263,7 @@ func NewModel() Model {
 		focusPane:         focusPaneEnvironments,
 		themes:            defaultThemes(),
 		status:            "Loading environments...",
+		statusKind:        statusKindLoading,
 	}
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")

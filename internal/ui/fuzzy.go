@@ -125,30 +125,30 @@ func (m Model) computeFuzzySearchResults() []fuzzySearchItem {
 }
 
 func (m *Model) normalizeFuzzySearchCursor() {
-	if len(m.fuzzySearchResults) == 0 {
+	n := len(m.fuzzySearchResults)
+	if n == 0 {
 		m.fuzzySearchCursor = 0
 		return
 	}
-	if m.fuzzySearchCursor < 0 {
-		m.fuzzySearchCursor = 0
+	m.fuzzySearchCursor = clampIndex(m.fuzzySearchCursor, n)
+	if !m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
+		return
 	}
-	if m.fuzzySearchCursor >= len(m.fuzzySearchResults) {
-		m.fuzzySearchCursor = len(m.fuzzySearchResults) - 1
-	}
-	// Skip header rows
-	if m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
-		m.fuzzySearchCursor++
-		if m.fuzzySearchCursor >= len(m.fuzzySearchResults) {
-			// Try going backwards instead
-			m.fuzzySearchCursor -= 2
-			for m.fuzzySearchCursor >= 0 && m.fuzzySearchResults[m.fuzzySearchCursor].IsHeader {
-				m.fuzzySearchCursor--
-			}
-			if m.fuzzySearchCursor < 0 {
-				m.fuzzySearchCursor = 0
-			}
+	// Walk forward past headers; if we run off the end, walk back from
+	// the end to find the last non-header row.
+	for i := m.fuzzySearchCursor + 1; i < n; i++ {
+		if !m.fuzzySearchResults[i].IsHeader {
+			m.fuzzySearchCursor = i
+			return
 		}
 	}
+	for i := n - 1; i >= 0; i-- {
+		if !m.fuzzySearchResults[i].IsHeader {
+			m.fuzzySearchCursor = i
+			return
+		}
+	}
+	// All rows are headers — leave clamped to a valid index.
 }
 
 func (m *Model) moveFuzzySearchCursor(direction int) {

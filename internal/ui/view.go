@@ -68,26 +68,10 @@ func (m Model) View() string {
 	if m.showShortcuts || m.showThemePicker {
 		bodyWidth := lipgloss.Width(body)
 		bodyHeight := lipgloss.Height(body)
-		popupWidth := bodyWidth - 8
-		if popupWidth > 92 {
-			popupWidth = 92
-		}
-		if popupWidth < 44 {
-			popupWidth = bodyWidth - 2
-		}
-		if popupWidth < 20 {
-			popupWidth = 20
-		}
-
-		popupHeight := bodyHeight - 4
-		if popupHeight > 30 {
-			popupHeight = 30
-		}
-		if popupHeight < 10 {
-			popupHeight = bodyHeight
-		}
-		if popupHeight < 6 {
-			popupHeight = 6
+		popupWidth := clampPopupWidth(bodyWidth-popupMargin, bodyWidth, popupMaxWidthSmall)
+		popupHeight := clampPopupHeight(bodyHeight-popupVerticalMargin, bodyHeight, popupMaxHeightSmall)
+		if popupHeight < popupMinHeightFloor {
+			popupHeight = popupMinHeightFloor
 		}
 
 		popup := m.renderShortcutsPane(popupWidth, popupHeight)
@@ -99,23 +83,8 @@ func (m Model) View() string {
 	if m.showFuzzySearch {
 		bw := lipgloss.Width(body)
 		bh := lipgloss.Height(body)
-		popupWidth := bw - 6
-		if popupWidth > 100 {
-			popupWidth = 100
-		}
-		if popupWidth < 44 {
-			popupWidth = bw - 2
-		}
-		if popupWidth < 20 {
-			popupWidth = 20
-		}
-		popupHeight := bh - 2
-		if popupHeight > 42 {
-			popupHeight = 42
-		}
-		if popupHeight < 10 {
-			popupHeight = bh
-		}
+		popupWidth := clampPopupWidth(bw-popupSearchMargin, bw, popupMaxWidthSearch)
+		popupHeight := clampPopupHeight(bh-popupVerticalMarginTight, bh, popupMaxHeightSearch)
 		popup := m.renderFuzzySearchPane(popupWidth, popupHeight)
 		body = overlayCentered(body, popup)
 	}
@@ -148,6 +117,53 @@ func (m Model) View() string {
 	}
 
 	return rendered
+}
+
+// Popup sizing constants. Centralises the magic numbers that were sprinkled
+// across the View() body. Two sizes: "small" for shortcuts/theme picker,
+// "search" for the wider fuzzy search popup.
+const (
+	popupMargin              = 8  // horizontal slack around shortcuts/theme popup
+	popupVerticalMargin      = 4  // vertical slack around shortcuts/theme popup
+	popupVerticalMarginTight = 2  // vertical slack around fuzzy search popup
+	popupSearchMargin        = 6  // horizontal slack around fuzzy search popup
+	popupMaxWidthSmall       = 92 // cap for shortcuts/theme popup
+	popupMaxWidthSearch      = 100
+	popupMaxHeightSmall      = 30
+	popupMaxHeightSearch     = 42
+	popupMinWidth            = 20
+	popupMinHeightFloor      = 6
+	popupPreferredMinWidth   = 44 // when below this, take all available width
+	popupPreferredMinHeight  = 10 // when below this, take all available height
+)
+
+// clampPopupWidth applies the popup width clamping rules used by both popup
+// kinds: cap at maxWidth, prefer at least popupPreferredMinWidth (falling back
+// to bodyWidth-2 when there's no room), absolute floor at popupMinWidth.
+func clampPopupWidth(desired, bodyWidth, maxWidth int) int {
+	w := desired
+	if w > maxWidth {
+		w = maxWidth
+	}
+	if w < popupPreferredMinWidth {
+		w = bodyWidth - 2
+	}
+	if w < popupMinWidth {
+		w = popupMinWidth
+	}
+	return w
+}
+
+// clampPopupHeight mirrors clampPopupWidth for height.
+func clampPopupHeight(desired, bodyHeight, maxHeight int) int {
+	h := desired
+	if h > maxHeight {
+		h = maxHeight
+	}
+	if h < popupPreferredMinHeight {
+		h = bodyHeight
+	}
+	return h
 }
 
 func paneBoxStyle(width, height int, focused bool) lipgloss.Style {
@@ -203,26 +219,27 @@ func fitLineToWidth(line string, width int) string {
 func (m Model) statusLineText() string {
 	hints := m.contextShortcutHints()
 	msg := strings.TrimSpace(m.status)
-	if msg == "" || suppressStatusMessage(msg) {
+	if msg == "" || m.shouldSuppressStatus() {
 		return hints
 	}
 	return hints + " | " + msg
 }
 
-func suppressStatusMessage(msg string) bool {
-	if strings.HasPrefix(msg, "Ready.") {
-		return true
-	}
-	if strings.HasPrefix(msg, "Focused ") {
-		return true
-	}
-	if strings.HasSuffix(msg, "panel focused") {
-		return true
-	}
-	if strings.HasPrefix(msg, "Shortcuts ") {
-		return true
-	}
-	if strings.HasPrefix(msg, "Theme picker ") {
+func (m Model) shouldSuppressStatus() bool {
+	// Prefix-based fallback handles the bulk of status assignments that
+	// still leave kind at the generic default. The kind field is consulted
+	// elsewhere (e.g. configLoadedMsg's "replace loading message" branch)
+	// and exists so new code can avoid stringly-typed prefix checks.
+	return suppressStatusMessageByPrefix(strings.TrimSpace(m.status))
+}
+
+func suppressStatusMessageByPrefix(msg string) bool {
+	switch {
+	case strings.HasPrefix(msg, "Ready."),
+		strings.HasPrefix(msg, "Focused "),
+		strings.HasSuffix(msg, "panel focused"),
+		strings.HasPrefix(msg, "Shortcuts "),
+		strings.HasPrefix(msg, "Theme picker "):
 		return true
 	}
 	return false
@@ -1324,11 +1341,15 @@ func (m Model) renderShortcutsPane(width, height int) string {
 }
 
 // colorRGB converts a lipgloss color string to R,G,B components (0-255).
+// Falls back to neutral grey (128,128,128) when the input doesn't parse.
 func colorRGB(color string) (int, int, int) {
 	if len(color) == 7 && color[0] == '#' {
-		r, _ := strconv.ParseInt(color[1:3], 16, 32)
-		g, _ := strconv.ParseInt(color[3:5], 16, 32)
-		b, _ := strconv.ParseInt(color[5:7], 16, 32)
+		r, errR := strconv.ParseInt(color[1:3], 16, 32)
+		g, errG := strconv.ParseInt(color[3:5], 16, 32)
+		b, errB := strconv.ParseInt(color[5:7], 16, 32)
+		if errR != nil || errG != nil || errB != nil {
+			return 128, 128, 128
+		}
 		return int(r), int(g), int(b)
 	}
 	n, err := strconv.Atoi(color)

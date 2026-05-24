@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,6 +11,18 @@ import (
 	pkgtheme "ide/internal/theme"
 )
 
+// styleMu guards writes to the package-level lipgloss style variables in
+// applyThemeStyles. The lipgloss style values themselves are value types,
+// so once assigned a goroutine reading them sees a consistent snapshot;
+// the mutex exists to make the write side safe under the (currently
+// theoretical) case of two Model instances applying themes concurrently.
+//
+// Note: there is only one TUI Model per process today — the fuzzy-search
+// popup is launched as a separate process via display-popup, not as an
+// in-process goroutine. If that changes, these styles should move onto
+// the Model so each instance has independent styling.
+var styleMu sync.Mutex
+
 // defaultThemes / normalizeTheme are thin shims around internal/theme so the
 // rest of this package keeps using the local names. Theme palette data and
 // normalization rules live in internal/theme.
@@ -17,6 +30,8 @@ func defaultThemes() []uiTheme         { return pkgtheme.Defaults() }
 func normalizeTheme(t uiTheme) uiTheme { return pkgtheme.Normalize(t) }
 
 func applyThemeStyles(theme uiTheme) {
+	styleMu.Lock()
+	defer styleMu.Unlock()
 	theme = normalizeTheme(theme)
 	paneStyle = lipgloss.NewStyle().
 		Background(lipgloss.Color(theme.PaneBG)).
@@ -131,14 +146,14 @@ func (m Model) currentThemeName() string {
 func (m Model) themeIndexByName(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return 0, false
+		return -1, false
 	}
 	for idx := range m.themes {
 		if strings.EqualFold(strings.TrimSpace(m.themes[idx].Name), name) {
 			return idx, true
 		}
 	}
-	return 0, false
+	return -1, false
 }
 
 func (m Model) filteredThemeIndices() []int {

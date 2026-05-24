@@ -64,7 +64,7 @@ func envWindowAdd(args []string) int {
 	cmd := fs.string("cmd", "startup command")
 	cwd := fs.string("cwd", "working directory (relative to env root)")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide env window add <env> <window> [--cmd CMD] [--cwd CWD]")
+		return parseUsagef(os.Stderr, err, "usage: ide env window add <env> <window> [--cmd CMD] [--cwd CWD]")
 	}
 	pos := fs.positional()
 	if len(pos) != 2 {
@@ -103,7 +103,7 @@ func envWindowSet(args []string) int {
 	cmd := fs.string("cmd", "startup command")
 	cwd := fs.string("cwd", "working directory")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide env window set <env> <window> [--name NEW] [--cmd CMD] [--cwd CWD]")
+		return parseUsagef(os.Stderr, err, "usage: ide env window set <env> <window> [--name NEW] [--cmd CMD] [--cwd CWD]")
 	}
 	pos := fs.positional()
 	if len(pos) != 2 {
@@ -192,7 +192,7 @@ func templateWindowAdd(args []string) int {
 	cmd := fs.string("cmd", "startup command")
 	cwd := fs.string("cwd", "working directory")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide template window add <template> <window> [--cmd CMD] [--cwd CWD]")
+		return parseUsagef(os.Stderr, err, "usage: ide template window add <template> <window> [--cmd CMD] [--cwd CWD]")
 	}
 	pos := fs.positional()
 	if len(pos) != 2 {
@@ -231,7 +231,7 @@ func templateWindowSet(args []string) int {
 	cmd := fs.string("cmd", "startup command")
 	cwd := fs.string("cwd", "working directory")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide template window set <template> <window> [--name NEW] [--cmd CMD] [--cwd CWD]")
+		return parseUsagef(os.Stderr, err, "usage: ide template window set <template> <window> [--name NEW] [--cmd CMD] [--cwd CWD]")
 	}
 	pos := fs.positional()
 	if len(pos) != 2 {

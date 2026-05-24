@@ -84,7 +84,7 @@ func envAdd(args []string) int {
 	folder := fs.string("folder", "display folder/group")
 	template := fs.string("template", "template name to seed windows from")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide env add <name> [--root PATH] [--db CONN] [--folder NAME] [--template NAME]")
+		return parseUsagef(os.Stderr, err, "usage: ide env add <name> [--root PATH] [--db CONN] [--folder NAME] [--template NAME]")
 	}
 	pos := fs.positional()
 	if len(pos) != 1 {
@@ -132,7 +132,7 @@ func envSet(args []string) int {
 	db := fs.string("db", "database connection string")
 	folder := fs.string("folder", "display folder/group")
 	if err := fs.parse(args); err != nil {
-		return usagef(os.Stderr, "usage: ide env set <name> [--root PATH] [--db CONN] [--folder NAME]")
+		return parseUsagef(os.Stderr, err, "usage: ide env set <name> [--root PATH] [--db CONN] [--folder NAME]")
 	}
 	pos := fs.positional()
 	if len(pos) != 1 {

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/creack/pty"
 
 	"ide/internal/config"
+	"ide/internal/layout"
 	"ide/internal/tmux"
 )
 
@@ -110,12 +112,22 @@ func pumpEmulatorReplies(em *vt.Emulator, ptmx *os.File) {
 	}
 }
 
-// WriteInput sends raw bytes (keyboard input) to the PTY.
+// WriteInput sends raw bytes (keyboard input) to the PTY. Loops over short
+// writes; on hard error the terminal is marked closed so the next read sees
+// an EOF and tears the session down rather than silently swallowing input.
 func (et *EmbeddedTerminal) WriteInput(data []byte) {
 	et.mu.Lock()
 	defer et.mu.Unlock()
-	if et.ptmx != nil && !et.closed {
-		et.ptmx.Write(data)
+	if et.ptmx == nil || et.closed {
+		return
+	}
+	for len(data) > 0 {
+		n, err := et.ptmx.Write(data)
+		if err != nil {
+			log.Printf("[Terminal] WriteInput error: %v", err)
+			return
+		}
+		data = data[n:]
 	}
 }
 
@@ -163,25 +175,33 @@ func (et *EmbeddedTerminal) Render(width, height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// Close tears down the PTY and process.
+// Close tears down the PTY and process. The kill+wait runs WITHOUT holding
+// et.mu so readPTYCmd's post-read mutex re-acquisition can't deadlock
+// against the wait — and so callers blocked in Render/Resize don't stall
+// while we reap the tmux subprocess.
 func (et *EmbeddedTerminal) Close() {
 	et.mu.Lock()
-	defer et.mu.Unlock()
 	if et.closed {
+		et.mu.Unlock()
 		return
 	}
 	et.closed = true
-	if et.vt != nil {
+	vtRef := et.vt
+	ptmx := et.ptmx
+	cmd := et.cmd
+	et.ptmx = nil
+	et.mu.Unlock()
+
+	if vtRef != nil {
 		// Unblocks pumpEmulatorReplies' em.Read so the goroutine exits.
-		_ = et.vt.Close()
+		_ = vtRef.Close()
 	}
-	if et.ptmx != nil {
-		et.ptmx.Close()
-		et.ptmx = nil
+	if ptmx != nil {
+		ptmx.Close()
 	}
-	if et.cmd != nil && et.cmd.Process != nil {
-		et.cmd.Process.Kill()
-		et.cmd.Wait()
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	}
 }
 
@@ -207,7 +227,11 @@ func readPTYCmd(et *EmbeddedTerminal) tea.Cmd {
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			et.mu.Lock()
-			et.vt.Write(buf[:n])
+			// Recheck closed: Close() may have run while we were blocked in
+			// Read(). Without this we'd write into a torn-down emulator.
+			if !et.closed && et.vt != nil {
+				et.vt.Write(buf[:n])
+			}
 			et.mu.Unlock()
 		}
 		if err != nil {
@@ -249,19 +273,8 @@ func (m Model) enterTerminalMode() (tea.Model, tea.Cmd) {
 	}
 	window := windows[m.selectedWindow]
 
-	// Compute terminal dimensions
 	_, rightWidth := splitPaneWidths(m.width - 1)
-	contentWidth := paneContentWidth(rightWidth)
-	bodyHeight := m.height - 2
-	if bodyHeight < 1 {
-		bodyHeight = 1
-	}
-	previewHeight := bodyHeight - 4 // title + tabs + blank + margin
-	if previewHeight < 1 {
-		previewHeight = 1
-	}
-
-	et := newEmbeddedTerminal(contentWidth, previewHeight)
+	et := newEmbeddedTerminal(paneContentWidth(rightWidth), layout.TerminalPreviewHeight(m.height))
 	if err := et.Attach(session, window); err != nil {
 		m.status = "Terminal attach failed: " + err.Error()
 		return m, nil
@@ -405,13 +418,21 @@ func keyToBytes(key string) []byte {
 			}
 			return nil
 		}
-		// Alt combinations: send ESC prefix
+		// Alt combinations: send ESC prefix in front of the underlying key's
+		// bytes. Recurse so e.g. "alt+ctrl+x" becomes ESC + 0x18 instead of
+		// ESC + the literal string "ctrl+x".
 		if ch, ok := strings.CutPrefix(key, "alt+"); ok {
-			return append([]byte{0x1b}, []byte(ch)...)
+			inner := keyToBytes(ch)
+			if len(inner) == 0 {
+				return nil
+			}
+			return append([]byte{0x1b}, inner...)
 		}
-		// Single printable character or unicode rune
-		if len(key) >= 1 {
-			return []byte(key)
+		// Single printable character or unicode rune. Bubbletea reports
+		// multi-rune names like "shift+f13" for keys we don't translate
+		// above — drop them rather than smuggle the literal name into the PTY.
+		if r := []rune(key); len(r) == 1 {
+			return []byte(string(r))
 		}
 		return nil
 	}
