@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vt10x → charmbracelet/x/vt</title>
+<style>
+  :root {
+    --base:      #eff1f5;
+    --mantle:    #e6e9ef;
+    --crust:     #dce0e8;
+    --text:      #4c4f69;
+    --subtext1:  #5c5f77;
+    --subtext0:  #6c6f85;
+    --overlay2:  #7c7f93;
+    --surface1:  #bcc0cc;
+    --surface0:  #ccd0da;
+    --rosewater: #dc8a78;
+    --flamingo:  #dd7878;
+    --pink:      #ea76cb;
+    --mauve:     #8839ef;
+    --red:       #d20f39;
+    --maroon:    #e64553;
+    --peach:     #fe640b;
+    --yellow:    #df8e1d;
+    --green:     #40a02b;
+    --teal:      #179299;
+    --sky:       #04a5e5;
+    --sapphire:  #209fb5;
+    --blue:      #1e66f5;
+    --lavender:  #7287fd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--base); color: var(--text); }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 32px 48px 64px;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+  h1 { font-weight: 600; font-size: 28px; margin: 0 0 6px; }
+  h2 { font-weight: 600; font-size: 20px; margin: 36px 0 10px; color: var(--mauve); border-bottom: 1px solid var(--surface0); padding-bottom: 6px; }
+  h3 { font-weight: 600; font-size: 15px; margin: 18px 0 6px; color: var(--blue); }
+  p, li { color: var(--subtext1); }
+  code, .mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 0.92em; background: var(--mantle); padding: 1px 5px; border-radius: 4px; }
+  pre {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .subtitle { color: var(--subtext0); margin-top: 0; }
+
+  .diagram, .flow {
+    position: relative;
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 16px 0 28px;
+  }
+  .diagram svg, .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grid {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 28px 36px;
+  }
+  .row {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 56px;
+  }
+  .row.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .row:last-child { margin-bottom: 0; }
+
+  .node, .box {
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-left: 4px solid var(--blue);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 0 var(--crust);
+  }
+  .box { padding: 10px 12px; font-size: 12.5px; }
+  .node .title, .box .h { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 13px; font-weight: 600; color: var(--text); }
+  .node .files { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 11px; color: var(--subtext0); margin-top: 4px; word-break: break-all; }
+  .node .desc, .box .d { font-size: 12px; color: var(--subtext1); margin-top: 6px; }
+  .box .h, .box .d { font-size: 11.5px; }
+
+  .entry    { border-left-color: var(--mauve); }
+  .dispatch { border-left-color: var(--pink); }
+  .runner   { border-left-color: var(--maroon); }
+  .ui       { border-left-color: var(--red); }
+  .config, .data { border-left-color: var(--yellow); }
+  .shell, .tmux  { border-left-color: var(--green); }
+  .pure, .theme  { border-left-color: var(--teal); }
+  .layout, .geom { border-left-color: var(--sky); }
+  .agent, .state { border-left-color: var(--sapphire); }
+  .term, .tty    { border-left-color: var(--lavender); }
+  .cli, .pty     { border-left-color: var(--peach); }
+  .render        { border-left-color: var(--red); }
+  .input         { border-left-color: var(--green); }
+  .vt, .bubble   { border-left-color: var(--sapphire); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--subtext1); margin-bottom: 12px; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { display: inline-block; width: 28px; height: 3px; border-radius: 2px; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--surface0); vertical-align: top; }
+  th { color: var(--mauve); font-weight: 600; }
+  td.fn { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--maroon); white-space: nowrap; }
+  td.target, td.k { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--blue); white-space: nowrap; }
+
+  ul { padding-left: 22px; }
+  ul li { margin: 3px 0; }
+
+  .callout {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-left: 4px solid var(--teal);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.warn   { border-left-color: var(--peach); }
+  .callout.answer { border-left-color: var(--mauve); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; color: var(--text); font-weight: 600; }
+
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .compare .col {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .compare .col.cur { border-left: 4px solid var(--peach); }
+  .compare .col.new { border-left: 4px solid var(--green); }
+  .compare .col h4 { margin: 0 0 6px; font-size: 14px; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 16px 0 24px; }
+  .stats .stat {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-left: 4px solid var(--mauve);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .stats .stat .v { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 22px; font-weight: 600; color: var(--text); }
+  .stats .stat .l { font-size: 11.5px; color: var(--subtext0); margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>vt10x → charmbracelet/x/vt</h1>
+<p class="subtitle">Replacing the virtual terminal emulator behind the live attach pane and the polled tmux preview, and throwing out a heap of accidental complexity in the process.</p>
+
+<div class="stats">
+  <div class="stat"><div class="v">+94 / −324</div><div class="l">net lines across 9 files</div></div>
+  <div class="stat"><div class="v">−210</div><div class="l">terminal.go (mostly hand-rolled SGR)</div></div>
+  <div class="stat"><div class="v">−100</div><div class="l">view.go (BG heuristic + injection)</div></div>
+  <div class="stat"><div class="v">1</div><div class="l">new tmux helper (<code>PaneSize</code>)</div></div>
+</div>
+
+<h2>1 · What changed at a glance</h2>
+
+<p>Two render paths used the embedded VT emulator. Both still exist, both still look the same, but the path through them is now much shorter.</p>
+
+<div class="legend">
+  <span class="item"><span class="swatch" style="background:var(--mauve)"></span> dropped / replaced</span>
+  <span class="item"><span class="swatch" style="background:var(--green)"></span> new or unchanged</span>
+  <span class="item"><span class="swatch" style="background:var(--lavender)"></span> terminal / vt</span>
+  <span class="item"><span class="swatch" style="background:var(--peach)"></span> tmux / pty</span>
+  <span class="item"><span class="swatch" style="background:var(--red)"></span> UI render</span>
+</div>
+
+<div class="compare">
+  <div class="col cur">
+    <h4>Before</h4>
+    <ul>
+      <li><code>hinshun/vt10x</code> for both renderers</li>
+      <li>Per-cell SGR walk in <code>Render(width,height)</code>, two memoised <code>map[Color]string</code> caches</li>
+      <li>Six <code>vtAttr*</code> bitmask constants reverse-engineered from vt10x internals</li>
+      <li><code>detectPreviewBG</code> scanned <code>capture-pane</code> bytes for the darkest <code>SGR 48</code> and reinjected it after every <code>\e[0m</code></li>
+      <li>Preview content lived as raw bytes in <code>m.previewContent</code>; the view did all the rendering work each frame</li>
+    </ul>
+  </div>
+  <div class="col new">
+    <h4>After</h4>
+    <ul>
+      <li><code>charmbracelet/x/vt</code> everywhere — <code>Emulator.Write</code> + <code>Emulator.Render</code></li>
+      <li>Render body collapses to <code>strings.Split</code> + <code>ansi.Cut</code> per line</li>
+      <li>No bitmasks, no SGR caches, no glyph walker</li>
+      <li>No BG heuristic. Untouched cells emit no BG escape, so the host terminal background shows through naturally</li>
+      <li>Preview is rendered in the capture goroutine; the view just bottom/left-crops and pads with empty strings</li>
+    </ul>
+  </div>
+</div>
+
+<h2>2 · Live attach path (terminal.go)</h2>
+
+<p>The PTY plumbing didn't change. The change is one struct field and one method body.</p>
+
+<div class="flow">
+  <svg viewBox="0 0 1200 200" preserveAspectRatio="none">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+      <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e66f5"/>
+      </marker>
+    </defs>
+    <path d="M 140,100 L 290,100"  stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 440,100 L 590,100"  stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 740,100 L 890,100"  stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow-blue)"/>
+    <path d="M 1040,100 L 1180,100" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+  </svg>
+  <div class="row four" style="grid-template-columns: repeat(5, 1fr); margin: 0;">
+    <div class="box tmux">
+      <div class="h">tmux attach-session</div>
+      <div class="d">Spawned under a <code>pty.StartWithSize</code> at the preview rect.</div>
+    </div>
+    <div class="box pty">
+      <div class="h">PTY (ptmx)</div>
+      <div class="d"><code>readPTYCmd</code> blocks on <code>Read</code> on a Bubble Tea goroutine.</div>
+    </div>
+    <div class="box vt">
+      <div class="h">vt.Emulator</div>
+      <div class="d">Bytes go in via <code>em.Write</code>; screen state lives in the emulator's cell buffer.</div>
+    </div>
+    <div class="box render">
+      <div class="h">Emulator.Render</div>
+      <div class="d">Returns the whole grid as an ANSI string. We split on <code>\n</code> and <code>ansi.Cut</code> per line.</div>
+    </div>
+    <div class="box ui">
+      <div class="h">renderTerminalPane</div>
+      <div class="d">Drops the result into the right-hand pane below the window tabs.</div>
+    </div>
+  </div>
+</div>
+
+<h3>The two-method surface</h3>
+
+<table>
+  <thead><tr><th>Public method</th><th>Before</th><th>After</th></tr></thead>
+  <tbody>
+    <tr>
+      <td class="fn">Attach(session, window)</td>
+      <td>Calls <code class="mono">vt10x.New(vt10x.WithSize(...))</code></td>
+      <td class="target">vt.NewEmulator(cols, rows)</td>
+    </tr>
+    <tr>
+      <td class="fn">Render(width, height)</td>
+      <td>≈ 70-line cell-walk emitting SGR per glyph, two memo caches, cursor reverse-video</td>
+      <td class="target">em.Render() · split · ansi.Cut</td>
+    </tr>
+    <tr>
+      <td class="fn">WriteInput / Resize / Close</td>
+      <td>unchanged</td>
+      <td>unchanged</td>
+    </tr>
+    <tr>
+      <td class="fn">readPTYCmd</td>
+      <td><code class="mono">et.vt.Write(buf[:n])</code></td>
+      <td class="target">same — both libs share the io.Writer shape</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The render body — before</h3>
+<pre>for row := 0; row &lt; rows; row++ {
+    var prevFG, prevBG vt10x.Color
+    var prevMode int16
+    prevIsCursor := false
+    needReset := false
+    for col := 0; col &lt; cols; col++ {
+        g := et.vt.Cell(col, row)
+        isCursor := showCursor && col == cur.X && row == cur.Y
+        if col == 0 || g.FG != prevFG || g.BG != prevBG ||
+           g.Mode != prevMode || isCursor != prevIsCursor {
+            if needReset { sb.WriteString("\x1b[0m") }
+            if isCursor {
+                sb.WriteString("\x1b[7m")
+                if sgr := et.glyphSGR(g); sgr != "" { sb.WriteString(sgr) }
+                needReset = true
+            } else {
+                if sgr := et.glyphSGR(g); sgr != "" {
+                    sb.WriteString(sgr); needReset = true
+                } else { needReset = false }
+            }
+            // ... bookkeeping ...
+        }
+        ch := g.Char; if ch == 0 { ch = ' ' }
+        sb.WriteRune(ch)
+    }
+}</pre>
+
+<h3>The render body — after</h3>
+<pre>rendered := et.vt.Render()
+if rendered == "" { return "" }
+lines := strings.Split(rendered, "\n")
+if len(lines) &gt; height { lines = lines[:height] }
+for i, line := range lines {
+    if ansi.StringWidth(line) &gt; width {
+        lines[i] = ansi.Cut(line, 0, width)
+    }
+}
+return strings.Join(lines, "\n")</pre>
+
+<div class="callout answer">
+  <h4>What we lost: the inline cursor block</h4>
+  <p>The old renderer drew a reverse-video block at <code>(cursor.X, cursor.Y)</code>. <code>x/vt</code>'s <code>Render</code> doesn't paint a cursor glyph, and the emulator doesn't expose <code>CursorVisible</code> publicly. Acceptable trade — tmux's status line and the application itself (vim, fish, htop) draw their own cursor; the preview pane only loses the synthetic block.</p>
+</div>
+
+<h2>3 · Preview path (capture-pane → vt → crop)</h2>
+
+<p>The preview ticks every 500 ms. Old flow handed raw capture bytes to the view, which scanned them for a BG color and patched it back into every line. New flow renders the bytes through a freshly-sized emulator in the capture goroutine — the view just slices what comes out.</p>
+
+<div class="diagram">
+  <svg viewBox="0 0 1200 360" preserveAspectRatio="none">
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+      <marker id="arrow2-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e66f5"/>
+      </marker>
+    </defs>
+    <!-- previewTick -> capturePaneCmd -->
+    <path d="M 200,60 C 200,100 320,110 380,110" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow2)"/>
+    <!-- capturePaneCmd -> tmux size -->
+    <path d="M 600,60 L 600,98" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow2)"/>
+    <!-- capturePaneCmd -> capture-pane -->
+    <path d="M 700,60 C 740,95 850,100 1000,100" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow2)"/>
+    <!-- size -> emulator -->
+    <path d="M 600,170 L 600,205" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow2-blue)"/>
+    <!-- capture bytes -> emulator -->
+    <path d="M 1000,170 C 900,220 750,225 700,235" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow2-blue)"/>
+    <!-- emulator -> panePreviewMsg -->
+    <path d="M 600,295 L 600,325" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow2-blue)"/>
+  </svg>
+  <div class="grid" style="grid-template-rows: auto auto auto auto; gap: 22px 24px;">
+    <!-- Row 1 -->
+    <div class="node bubble">
+      <div class="title">previewTickMsg (500ms)</div>
+      <div class="files">internal/ui/commands.go</div>
+      <div class="desc">Bubble Tea timer fans out one <code>capturePaneCmd</code> per visible window.</div>
+    </div>
+    <div class="node dispatch">
+      <div class="title">capturePaneCmd</div>
+      <div class="files">commands.go: capturePaneCmd</div>
+      <div class="desc">Runs off the main loop. Builds + writes + renders the emulator before returning a message.</div>
+    </div>
+    <div class="node tmux">
+      <div class="title">tmux capture-pane -p -e</div>
+      <div class="files">internal/tmux/tmux.go</div>
+      <div class="desc">Captures the visible screen as bytes with SGR escapes — unchanged flag set.</div>
+    </div>
+    <!-- Row 2 -->
+    <div></div>
+    <div class="node tmux">
+      <div class="title">tmux display-message</div>
+      <div class="files">tmux.PaneSize (new)</div>
+      <div class="desc">Returns <code>#{pane_width} #{pane_height}</code>. Skips this tick on error.</div>
+    </div>
+    <div></div>
+    <!-- Row 3 -->
+    <div></div>
+    <div class="node vt">
+      <div class="title">vt.NewEmulator(cols, rows)</div>
+      <div class="files">github.com/charmbracelet/x/vt</div>
+      <div class="desc">Fresh emulator sized exactly to the source pane; <code>em.Write(raw)</code> replays the capture.</div>
+    </div>
+    <div></div>
+    <!-- Row 4 -->
+    <div></div>
+    <div class="node render">
+      <div class="title">panePreviewMsg { content }</div>
+      <div class="files">commands.go: type panePreviewMsg</div>
+      <div class="desc">Now carries the rendered ANSI string instead of raw bytes — the model just stores it.</div>
+    </div>
+    <div></div>
+  </div>
+</div>
+
+<h3>capturePaneCmd, after</h3>
+<pre>func capturePaneCmd(session, window string) tea.Cmd {
+    return func() tea.Msg {
+        process := tmux.CurrentProcess(session, window)
+        cols, rows, err := tmux.PaneSize(session, window)
+        if err != nil || cols &lt;= 0 || rows &lt;= 0 {
+            return panePreviewMsg{session: session, window: window, process: process}
+        }
+        raw, _ := tmux.CapturePane(session, window)
+        em := vt.NewEmulator(cols, rows)
+        em.Write([]byte(raw))
+        return panePreviewMsg{
+            session: session, window:  window,
+            content: em.Render(),
+            process: process,
+        }
+    }
+}</pre>
+
+<h3>renderPreviewRows, after</h3>
+<pre>captureLines := strings.Split(strings.TrimRight(m.previewContent, "\n"), "\n")
+start := len(captureLines) - previewHeight
+if start &lt; 0 { start = 0 }
+for _, line := range captureLines[start:] {
+    if ansi.StringWidth(line) &gt; contentWidth {
+        line = ansi.Cut(line, 0, contentWidth)
+    }
+    previewRows = append(previewRows, line)
+}
+for len(previewRows) &lt; previewHeight {
+    previewRows = append(previewRows, "")   // empty == host BG shows through
+}</pre>
+
+<h2>4 · The accidental complexity we deleted</h2>
+
+<p>The old code did a lot of work to paper over one limitation: <code>capture-pane</code> output isn't padded to a rectangle, so when the preview area was wider than the longest line the right edge revealed whatever lipgloss painted behind it. The fix was a heuristic plus a string-rewriter. With the emulator owning the rectangle, the symptom disappears.</p>
+
+<table>
+  <thead><tr><th>Symbol</th><th>Lived in</th><th>Why it existed</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td class="fn">detectPreviewBG</td><td>view.go</td><td>Scan SGR 48 params, keep the darkest by luminance, assume that's the terminal base BG.</td><td class="target">deleted</td></tr>
+    <tr><td class="fn">colorToANSIBG</td><td>view.go</td><td>Turn the chosen BG into a raw <code>\e[48;…m</code> for reinjection.</td><td class="target">deleted</td></tr>
+    <tr><td class="fn">injectBGIntoLine</td><td>view.go</td><td>Patch the BG seq in after every <code>\e[0m</code> so resets didn't bleed.</td><td class="target">deleted</td></tr>
+    <tr><td class="fn">m.previewBG</td><td>model.go</td><td>Cached the detected BG per <code>(session, window)</code>.</td><td class="target">field removed</td></tr>
+    <tr><td class="fn">glyphSGR / cachedColorSGR / colorSGR</td><td>terminal.go</td><td>Per-glyph SGR builder + two <code>map[vt10x.Color]string</code> memo caches with a 4096 cap.</td><td class="target">deleted (vt.Render does this)</td></tr>
+    <tr><td class="fn">vtAttr* / vtDefaultFG / vtDefaultBG</td><td>terminal.go</td><td>Bitmask + sentinel constants copied from vt10x internals.</td><td class="target">deleted</td></tr>
+    <tr><td class="fn">sgrRe (regexp)</td><td>view.go</td><td>Drove <code>detectPreviewBG</code>.</td><td class="target">import dropped</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <h4>Why the host BG now blends</h4>
+  <p>x/vt's <code>Buffer.Render</code> walks cells and only emits a style change when a cell has a non-zero <code>Style</code>. Empty cells (default pen) write a plain space with no SGR, so the host terminal background shows through. Tmux's status bar and any TUI that paints its own BG still come through coloured; <em>untouched</em> cells stay transparent. That removes the entire reason <code>detectPreviewBG</code> existed.</p>
+</div>
+
+<h2>5 · Files touched</h2>
+
+<table>
+  <thead><tr><th>File</th><th>Δ</th><th>What</th></tr></thead>
+  <tbody>
+    <tr><td class="fn">internal/ui/terminal.go</td><td class="target">−210 (net)</td><td>Field swap, render rewrite, drop SGR caches and constants.</td></tr>
+    <tr><td class="fn">internal/ui/view.go</td><td class="target">−100 (net)</td><td>Simplify <code>renderPreviewRows</code>; delete detector / injector / regex.</td></tr>
+    <tr><td class="fn">internal/ui/commands.go</td><td class="target">+16</td><td>Render through <code>vt.NewEmulator</code> inside <code>capturePaneCmd</code>.</td></tr>
+    <tr><td class="fn">internal/ui/update.go</td><td class="target">−3</td><td>Drop the <code>previewBG</code> detection branch.</td></tr>
+    <tr><td class="fn">internal/ui/model.go</td><td class="target">−1</td><td>Drop the <code>previewBG</code> field.</td></tr>
+    <tr><td class="fn">internal/tmux/tmux.go</td><td class="target">+14</td><td>New <code>PaneSize</code> via <code>display-message -p '#{pane_width} #{pane_height}'</code>.</td></tr>
+    <tr><td class="fn">go.mod / go.sum</td><td class="target">±</td><td>Drop <code>hinshun/vt10x</code>; add <code>charmbracelet/x/vt</code> and its <code>ultraviolet</code> chain.</td></tr>
+  </tbody>
+</table>
+
+<h2>6 · What I couldn't verify here</h2>
+
+<div class="callout warn">
+  <h4>Manual verification deferred</h4>
+  <p>The agent box doesn't have a display, so checks (a)–(h) in the task — preview blends with light & dark hosts, vim/htop colors, narrow/tall/wide pane crops, attach/detach round-trip — were not run. Static checks <em>did</em> pass: <code>go fmt ./…</code>, <code>go vet ./…</code>, <code>go build .</code> all clean against the new module graph.</p>
+</div>
+
+<h3>What to look for first</h3>
+<ul>
+  <li><strong>Light terminal background.</strong> Open the app under a Catppuccin Latte (or Solarized Light) host. The preview rect should fade into the page; if you see a dark band around the bottom-left content, <code>vt.Render</code> is emitting BG for empty cells and we need to investigate cell zero-style detection.</li>
+  <li><strong>Wider host pane than preview rect.</strong> Long lines should clip cleanly; the column at <code>contentWidth − 1</code> should not bleed SGR into the right-side gap.</li>
+  <li><strong>Cursor position in vim.</strong> Vim's own cursor block should still show — the lost block was the synthetic reverse-video one, not the application's.</li>
+</ul>
+
+<h2>7 · Structural surprises from x/vt</h2>
+
+<p>Two API shape differences that nudged the design beyond the brief:</p>
+
+<ul>
+  <li><code>x/vt</code> doesn't expose <code>CursorVisible()</code> — visibility is tracked internally but only reachable via a <code>Callbacks.CursorVisibility</code> hook. We dropped synthetic cursor rendering rather than register a callback for what's essentially decoration.</li>
+  <li>The brief mentioned <code>cellbuf.Render(term.Screen())</code>. The current <code>x/vt</code> exposes <code>Terminal.Render() string</code> directly (which walks the underlying ultraviolet buffer), so we use that — same result, one fewer import.</li>
+</ul>
+
+</body>
+</html>

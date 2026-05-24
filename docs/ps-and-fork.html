@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fork, exec, and ps -A</title>
+<style>
+  :root {
+    --base:      #eff1f5;
+    --mantle:    #e6e9ef;
+    --crust:     #dce0e8;
+    --text:      #4c4f69;
+    --subtext1:  #5c5f77;
+    --subtext0:  #6c6f85;
+    --overlay2:  #7c7f93;
+    --surface1:  #bcc0cc;
+    --surface0:  #ccd0da;
+    --rosewater: #dc8a78;
+    --flamingo:  #dd7878;
+    --pink:      #ea76cb;
+    --mauve:     #8839ef;
+    --red:       #d20f39;
+    --maroon:    #e64553;
+    --peach:     #fe640b;
+    --yellow:    #df8e1d;
+    --green:     #40a02b;
+    --teal:      #179299;
+    --sky:       #04a5e5;
+    --sapphire:  #209fb5;
+    --blue:      #1e66f5;
+    --lavender:  #7287fd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--base); color: var(--text); }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+    line-height: 1.55;
+    padding: 32px 48px 64px;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+  h1 { font-weight: 600; font-size: 28px; margin: 0 0 6px; }
+  h2 { font-weight: 600; font-size: 20px; margin: 36px 0 10px; color: var(--mauve); border-bottom: 1px solid var(--surface0); padding-bottom: 6px; }
+  h3 { font-weight: 600; font-size: 15px; margin: 18px 0 6px; color: var(--blue); }
+  p, li { color: var(--subtext1); }
+  code, .mono { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 0.92em; background: var(--mantle); padding: 1px 5px; border-radius: 4px; }
+  pre {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .subtitle { color: var(--subtext0); margin-top: 0; }
+
+  .diagram, .flow {
+    position: relative;
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 16px 0 28px;
+  }
+  .diagram svg, .flow svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .grid {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 28px 36px;
+  }
+  .row {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+    gap: 18px;
+    margin-bottom: 56px;
+  }
+  .row:last-child { margin-bottom: 0; }
+
+  .node, .box {
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-left: 4px solid var(--blue);
+    border-radius: 8px;
+    padding: 12px 14px;
+    box-shadow: 0 1px 0 var(--crust);
+  }
+  .box { padding: 10px 12px; font-size: 12.5px; }
+  .node .title, .box .h { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 13px; font-weight: 600; color: var(--text); }
+  .node .files { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 11px; color: var(--subtext0); margin-top: 4px; word-break: break-all; }
+  .node .desc, .box .d { font-size: 12px; color: var(--subtext1); margin-top: 6px; }
+  .box .h, .box .d { font-size: 11.5px; }
+
+  .parent   { border-left-color: var(--mauve); }
+  .child    { border-left-color: var(--pink); }
+  .kernel   { border-left-color: var(--lavender); }
+  .program  { border-left-color: var(--maroon); }
+  .syscall  { border-left-color: var(--peach); }
+  .data     { border-left-color: var(--yellow); }
+  .leaf     { border-left-color: var(--teal); }
+  .shell    { border-left-color: var(--green); }
+  .tree     { border-left-color: var(--sapphire); }
+  .note     { border-left-color: var(--sky); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12px; color: var(--subtext1); margin-bottom: 12px; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { display: inline-block; width: 28px; height: 3px; border-radius: 2px; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--surface0); vertical-align: top; }
+  th { color: var(--mauve); font-weight: 600; }
+  td.fn { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--maroon); white-space: nowrap; }
+  td.target, td.k { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; color: var(--blue); white-space: nowrap; }
+  td.num { text-align: right; font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; }
+
+  ul { padding-left: 22px; }
+  ul li { margin: 3px 0; }
+
+  .callout {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-left: 4px solid var(--teal);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .callout.warn   { border-left-color: var(--peach); }
+  .callout.answer { border-left-color: var(--mauve); }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; color: var(--text); font-weight: 600; }
+
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .compare .col {
+    background: var(--mantle);
+    border: 1px solid var(--surface0);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .compare .col.cur { border-left: 4px solid var(--peach); }
+  .compare .col.new { border-left: 4px solid var(--green); }
+  .compare .col h4 { margin: 0 0 6px; font-size: 14px; }
+
+  .keymono {
+    font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+    color: var(--maroon);
+  }
+</style>
+</head>
+<body>
+
+<h1>fork, exec, and <span class="mono">ps&nbsp;-A</span></h1>
+<p class="subtitle">Why running a subprocess is expensive, what the kernel actually does, and why one <code>ps -A</code> beats sixty <code>pgrep</code>s.</p>
+
+<h2>1 · The fork+exec dance</h2>
+
+<p>On Unix there is <em>no</em> system call that says &ldquo;run this other program.&rdquo; The only way to start one is a two-step ritual:</p>
+
+<div class="legend">
+  <span class="item"><span class="swatch" style="background:var(--mauve)"></span> parent process</span>
+  <span class="item"><span class="swatch" style="background:var(--pink)"></span> child process</span>
+  <span class="item"><span class="swatch" style="background:var(--lavender)"></span> kernel</span>
+  <span class="item"><span class="swatch" style="background:var(--maroon)"></span> target program</span>
+  <span class="item"><span class="swatch" style="background:var(--peach)"></span> syscall</span>
+</div>
+
+<div class="flow" style="height:430px">
+  <svg viewBox="0 0 1200 430" preserveAspectRatio="none">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+      <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e66f5"/>
+      </marker>
+    </defs>
+    <!-- step 1 → fork syscall -->
+    <path d="M 170,80 L 480,80" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow-blue)"/>
+    <!-- fork → parent and child -->
+    <path d="M 600,110 C 600,160 320,180 200,205" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <path d="M 600,110 C 600,160 880,180 1000,205" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- child → exec syscall -->
+    <path d="M 1000,265 L 1000,310" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow-blue)"/>
+    <!-- exec → becomes ps -->
+    <path d="M 1000,355 L 1000,395" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow)"/>
+    <!-- parent waits, dashed back from child finish -->
+    <path d="M 880,420 C 600,420 320,300 200,265" stroke="#7c7f93" stroke-width="1.6" fill="none" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  </svg>
+
+  <!-- Row 1: parent calls fork -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:30px;">
+    <div class="box parent">
+      <div class="h">Go program (parent)</div>
+      <div class="d">calls <code>cmd.Run()</code> which invokes <code>syscall.ForkExec</code> under the hood.</div>
+    </div>
+    <div class="box syscall" style="text-align:center">
+      <div class="h">fork()</div>
+      <div class="d">request to the kernel: &ldquo;duplicate me.&rdquo;</div>
+    </div>
+    <div class="box kernel">
+      <div class="h">kernel</div>
+      <div class="d">allocates a new PID; copies process metadata (page tables, fds, signal handlers).</div>
+    </div>
+  </div>
+
+  <!-- Row 2: parent / child -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:30px;">
+    <div class="box parent">
+      <div class="h">parent (unchanged)</div>
+      <div class="d">fork returns the child&rsquo;s PID. Parent waits with <code>cmd.Wait()</code>.</div>
+    </div>
+    <div></div>
+    <div class="box child">
+      <div class="h">child copy</div>
+      <div class="d">identical memory to the parent. fork returns <code>0</code> here — that&rsquo;s how it knows it&rsquo;s the child.</div>
+    </div>
+  </div>
+
+  <!-- Row 3: child exec -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:30px;">
+    <div></div>
+    <div></div>
+    <div class="box syscall" style="text-align:center">
+      <div class="h">exec(&ldquo;ps&rdquo;, &hellip;)</div>
+      <div class="d">replace this process&rsquo;s memory with the <code>ps</code> binary.</div>
+    </div>
+  </div>
+
+  <!-- Row 4: child becomes ps -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr; margin-bottom:0;">
+    <div></div>
+    <div></div>
+    <div class="box program">
+      <div class="h">ps (runs, prints, exits)</div>
+      <div class="d">parent&rsquo;s <code>Wait()</code> unblocks, collects exit code and stdout.</div>
+    </div>
+  </div>
+</div>
+
+<div class="callout answer">
+  <h4>Why the dance?</h4>
+  <p>If Go called <code>exec("ps")</code> directly without forking, your Go program would <em>become</em> <code>ps</code> and never come back. Fork gives you a throwaway copy to spend on the new program; the original keeps running.</p>
+</div>
+
+<h2>2 · Why fork is expensive (and especially on macOS)</h2>
+
+<p>Even with all the optimisations modern kernels do, fork is not free:</p>
+
+<ul>
+  <li><strong>Page tables.</strong> The kernel duplicates the parent&rsquo;s page-table entries so the child sees the same memory. Copy-on-write means the underlying pages aren&rsquo;t physically copied until written, but the bookkeeping is per-page.</li>
+  <li><strong>File descriptor table.</strong> Cloned. So is the signal handler table, working directory, controlling tty, umask, &hellip;</li>
+  <li><strong>kqueue / epoll / pid maps.</strong> The Go runtime has signal handlers, GC state, and an internal scheduler that all have to be in a consistent state at the moment of fork.</li>
+</ul>
+
+<h3>The macOS tax</h3>
+
+<p>XNU (macOS&rsquo;s kernel) does <em>more</em> work per fork than Linux:</p>
+
+<ul>
+  <li>Stricter parent/child isolation by default — fewer shared structures.</li>
+  <li>The <code>fork</code> implementation has to negotiate with the macOS security subsystems (sandbox, entitlements) which each get a chance to inspect the new process.</li>
+  <li>macOS prefers <code>posix_spawn</code> for spawning new programs. It combines fork+exec into one call and skips much of the dup-then-throw-away work. Go uses it on macOS where it can — but for the explicit fork-then-do-something case, you pay full price.</li>
+</ul>
+
+<div class="callout warn">
+  <h4>Rough order of magnitude</h4>
+  <p>A <code>fork+exec</code> of a small program on a recent MacBook is on the order of <strong>1&ndash;5&nbsp;ms</strong> of wall time and ~10&nbsp;ms of CPU. Doing that 60 times every 500&nbsp;ms shows up as constant background CPU. Doing it once doesn&rsquo;t.</p>
+</div>
+
+<h2>3 · What <span class="mono">ps -A</span> returns</h2>
+
+<p><code>ps -A</code> (also spelled <code>ps -e</code>) dumps the entire system process table in a single call. Without flags it shows four default columns:</p>
+
+<pre>  PID TTY           TIME CMD
+    1 ??         0:42.13 /sbin/launchd
+  123 ??         0:00.05 /usr/sbin/syslogd
+  456 ttys001    0:12.30 -fish
+  789 ttys001    0:00.81 nvim
+ 1011 ttys002    0:00.02 ps -A
+ ...</pre>
+
+<p>With <code>-o</code> you pick exactly the columns you need. The code in <code>internal/tmux/tmux.go</code> uses:</p>
+
+<pre>ps -A -o pid= -o ppid= -o %cpu= -o state=</pre>
+
+<p>The trailing <code>=</code> on each format specifier suppresses that column&rsquo;s header row, so the output is pure data:</p>
+
+<pre>    1     0   0.0 S
+  123     1   0.0 S
+  456   123   0.1 S
+  789   456  12.4 R</pre>
+
+<table>
+  <tr>
+    <th>column</th>
+    <th>meaning</th>
+    <th>why we need it</th>
+  </tr>
+  <tr>
+    <td class="k">pid</td>
+    <td>process ID</td>
+    <td>identifies the row, and is what tmux gives us for the pane shell.</td>
+  </tr>
+  <tr>
+    <td class="k">ppid</td>
+    <td>parent process ID</td>
+    <td>the edges of the process tree — lets us reconstruct descendants without <code>pgrep</code>.</td>
+  </tr>
+  <tr>
+    <td class="k">%cpu</td>
+    <td>recent CPU percentage</td>
+    <td>the metric we sum to decide if an AI agent is &ldquo;cooking.&rdquo;</td>
+  </tr>
+  <tr>
+    <td class="k">state</td>
+    <td>R, S, D, Z, T &hellip;</td>
+    <td>one of these in the subtree being <code>R</code> means something is actively running.</td>
+  </tr>
+</table>
+
+<h3>State codes you&rsquo;ll see</h3>
+
+<table>
+  <tr><td class="k">R</td><td>running (or runnable — on a CPU or waiting for one)</td></tr>
+  <tr><td class="k">S</td><td>sleeping (most processes most of the time)</td></tr>
+  <tr><td class="k">D</td><td>uninterruptible sleep (disk wait)</td></tr>
+  <tr><td class="k">Z</td><td>zombie (exited, parent hasn&rsquo;t reaped)</td></tr>
+  <tr><td class="k">T</td><td>stopped (e.g. by SIGSTOP)</td></tr>
+</table>
+
+<h2>4 · Walking the tree in memory</h2>
+
+<p>Once you have the full table, building the parent → children map and walking the subtree is just hash-table work — no subprocesses, no syscalls.</p>
+
+<div class="legend">
+  <span class="item"><span class="swatch" style="background:var(--yellow)"></span> ps table snapshot</span>
+  <span class="item"><span class="swatch" style="background:var(--sapphire)"></span> child map (ppid → []pid)</span>
+  <span class="item"><span class="swatch" style="background:var(--green)"></span> shell / agent root</span>
+  <span class="item"><span class="swatch" style="background:var(--teal)"></span> descendants</span>
+</div>
+
+<div class="diagram" style="height:340px">
+  <svg viewBox="0 0 1200 340" preserveAspectRatio="none">
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7c7f93"/>
+      </marker>
+      <marker id="arrow2-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e66f5"/>
+      </marker>
+    </defs>
+    <!-- ps snapshot → child map -->
+    <path d="M 280,140 C 380,140 420,140 510,140" stroke="#1e66f5" stroke-width="1.6" fill="none" marker-end="url(#arrow2-blue)"/>
+    <!-- child map → shell root -->
+    <path d="M 780,140 C 880,140 900,140 990,90" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow2)"/>
+    <!-- shell root → descendants -->
+    <path d="M 1085,125 L 1085,210" stroke="#7c7f93" stroke-width="1.6" fill="none" marker-end="url(#arrow2)"/>
+  </svg>
+
+  <div class="row" style="grid-template-columns: 1.1fr 1.4fr 1fr; margin-bottom:0; height:100%;">
+    <div class="box data">
+      <div class="h">snapshotProcesses()</div>
+      <div class="d">runs <code>ps -A -o pid= -o ppid= -o %cpu= -o state=</code> once, parses each line into a <code>procRow</code>, returns <code>map[int]procRow</code>.</div>
+    </div>
+    <div class="box tree">
+      <div class="h">buildChildMap(rows)</div>
+      <div class="d">groups every row by its <code>ppid</code>. Result: <code>map[int][]int</code> — for any PID, look up its direct children in O(1).</div>
+    </div>
+    <div>
+      <div class="box shell" style="margin-bottom:18px">
+        <div class="h">shellPID (pane root)</div>
+        <div class="d">tmux <code>display-message -p #{pane_pid}</code> gave us this. Push it onto a stack and walk down.</div>
+      </div>
+      <div class="box leaf">
+        <div class="h">descendants</div>
+        <div class="d">iterative DFS using the child map. Sum <code>cpu</code>; flip <code>hasRunning</code> if any state is <code>R</code>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p>The walk itself is the boring part — a stack, a visited set, a couple of accumulators:</p>
+
+<pre>stack := []int{shellPID}
+for len(stack) &gt; 0 {
+    pid := pop(stack)
+    if visited[pid] { continue }
+    visited[pid] = true
+
+    if row, ok := rows[pid]; ok {
+        totalCPU += row.cpu
+        if row.state == "R" { hasRunning = true }
+    }
+    stack = append(stack, children[pid]...)
+}</pre>
+
+<h2>5 · Old vs new — the actual diff</h2>
+
+<p>The bug the review caught: this loop was running 500 ms apart for every AI window, each iteration doing the wrong thing N times.</p>
+
+<div class="compare">
+  <div class="col cur">
+    <h4>Before — fork-bomb per poll</h4>
+<pre>// for each AI window per tick:
+shellPID := tmux display-message ...
+
+// recursive walk:
+pgrep -P shellPID          // fork+exec
+for each child:
+    ps -p child -o %cpu,state  // fork+exec
+    pgrep -P child         // fork+exec
+    for each grandchild:
+        ps -p ...          // fork+exec
+        pgrep -P ...       // fork+exec
+        ...</pre>
+    <p style="margin:8px 0 0; font-size:12.5px;">For a tree of N descendants: roughly <strong>2N forks</strong>. Times M AI windows. Twice a second.</p>
+  </div>
+  <div class="col new">
+    <h4>After — one ps -A per poll</h4>
+<pre>// once per tick, total:
+rows := snapshotProcesses()       // ONE fork+exec
+children := buildChildMap(rows)   // pure Go
+
+// per AI window:
+shellPID := tmux display-message ...
+walk(shellPID, rows, children)    // no syscalls</pre>
+    <p style="margin:8px 0 0; font-size:12.5px;">One subprocess per tick, regardless of tree size, AI window count, or descendant depth.</p>
+  </div>
+</div>
+
+<h3>Concrete numbers</h3>
+
+<table>
+  <tr>
+    <th>scenario</th>
+    <th>before</th>
+    <th>after</th>
+  </tr>
+  <tr>
+    <td>1 AI window, 10 descendants</td>
+    <td class="num">~20 forks / tick</td>
+    <td class="num">1 fork / tick</td>
+  </tr>
+  <tr>
+    <td>3 AI windows, ~10 descendants each</td>
+    <td class="num">~60 forks / tick</td>
+    <td class="num">1 fork / tick</td>
+  </tr>
+  <tr>
+    <td>3 AI windows × 2 ticks/sec × 60s/min</td>
+    <td class="num">~7,200 forks / min</td>
+    <td class="num">120 forks / min</td>
+  </tr>
+</table>
+
+<div class="callout">
+  <h4>Why it doesn&rsquo;t matter that <code>ps -A</code> returns &ldquo;too much&rdquo;</h4>
+  <p><code>ps -A</code> dumps every process on the system — typically a few hundred lines. Parsing that in Go is a tight loop over a byte buffer: trivial compared to one <code>fork</code>. Trading one expensive syscall for ~500 cheap field-parses is always a win.</p>
+</div>
+
+<h2>6 · Recap</h2>
+
+<ul>
+  <li><code>fork()</code> + <code>exec()</code> is the only way to start another program on Unix. The fork is the &ldquo;make a throwaway copy&rdquo; step; the exec is &ldquo;replace that copy with the target binary.&rdquo;</li>
+  <li>Each one involves real kernel work — page tables, fd table, signal handlers — and on macOS the per-fork cost is higher than on Linux.</li>
+  <li><code>ps -A</code> hands you the entire process table at once. With <code>-o pid= -o ppid= -o %cpu= -o state=</code> you get exactly the four fields you need to rebuild the tree, sum CPU, and detect activity — all in memory, in Go, with zero further subprocesses.</li>
+  <li>The fix swapped an O(tree-size × AI-windows) fork loop for a single fork per poll. Same answer; orders of magnitude less work for the kernel.</li>
+</ul>
+
+</body>
+</html>

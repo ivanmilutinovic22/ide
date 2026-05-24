@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why the preview paints a coloured rectangle</title>
+<style>
+  :root {
+    --paper:      #f6f1e7;
+    --sheet:      #fbf7ef;
+    --ink:        #1f1a14;
+    --ink-soft:   #4a4136;
+    --muted:      #7a6f5e;
+    --rule:       #c9bda6;
+    --rule-soft:  #ddd2bb;
+    --accent:     #6b3a1f;
+    --accent-2:   #8a5a2b;
+    --mark:       #f0e4c2;
+    --ok:         #3d6b2a;
+    --no:         #8a2a2a;
+
+    --kw:         #6b3a1f;
+    --ident:      #2a4a6b;
+    --str:        #5a4a1f;
+    --comment:    #8a7f6e;
+    --num:        #6b4f1f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      repeating-linear-gradient(
+        90deg,
+        rgba(0,0,0,0.012) 0,
+        rgba(0,0,0,0.012) 1px,
+        transparent 1px,
+        transparent 3px
+      ),
+      var(--paper);
+    color: var(--ink);
+    font: 16px/1.65 "Iowan Old Style", "Palatino Linotype", "Palatino",
+                    "Charter", Georgia, "Times New Roman", serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-width: 720px;
+    margin: 32px auto;
+    padding: 72px 56px 96px;
+    background: var(--paper);
+    box-shadow:
+      0 0 0 1px var(--rule-soft),
+      0 18px 60px -30px rgba(50, 35, 15, 0.35);
+    border: 1px solid var(--rule-soft);
+  }
+
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 600;
+    font-size: 30px;
+    line-height: 1.2;
+    margin: 0 0 4px;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+    text-align: center;
+  }
+  h1::after {
+    content: "";
+    display: block;
+    width: 60px;
+    height: 1px;
+    background: var(--accent);
+    margin: 14px auto 0;
+  }
+
+  h2 {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 40px 0 14px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--rule);
+    font-variant: small-caps;
+    letter-spacing: 0.04em;
+  }
+
+  h3 {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent-2);
+    margin: 22px 0 8px;
+    font-variant: small-caps;
+    letter-spacing: 0.06em;
+  }
+
+  p { margin: 0 0 14px; color: var(--ink); }
+  p + p { text-indent: 1.4em; }
+
+  .lede {
+    color: var(--ink-soft);
+    font-style: italic;
+    font-size: 17px;
+    text-align: center;
+    margin: 0 auto 40px;
+    max-width: 540px;
+    line-height: 1.55;
+  }
+
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  ul li { margin-bottom: 5px; }
+  ul li::marker { color: var(--accent); }
+
+  code, pre, .mono {
+    font-family: "Iosevka", "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+    font-size: 13.5px;
+  }
+  code {
+    background: var(--mark);
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--ink);
+    border: 1px solid rgba(107, 58, 31, 0.12);
+  }
+
+  pre {
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0;
+    padding: 14px 18px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.015);
+    line-height: 1.55;
+  }
+  pre code { background: transparent; padding: 0; border: 0; color: var(--ink); }
+
+  .kw   { color: var(--kw);   font-weight: 600; }
+  .id   { color: var(--ident); }
+  .str  { color: var(--str); }
+  .com  { color: var(--comment); font-style: italic; }
+  .num  { color: var(--num); }
+
+  .callout {
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    background: var(--sheet);
+    padding: 14px 18px;
+    margin: 14px 0 22px;
+    font-size: 15px;
+    color: var(--ink-soft);
+  }
+  .callout strong { color: var(--accent); }
+  .callout.warn { border-left-color: var(--accent-2); }
+  .callout.warn strong { color: var(--accent-2); }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 0 0 22px;
+    font-size: 14px;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+  }
+  th, td {
+    text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  thead tr { background: var(--mark); }
+  th {
+    color: var(--accent); font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-variant: small-caps;
+    border-bottom: 1px solid var(--rule);
+  }
+  td.mono { white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .flow { display: grid; gap: 10px; grid-template-columns: 1fr; margin: 14px 0 22px; }
+  .step {
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    padding: 12px 16px;
+    display: grid; grid-template-columns: 32px 1fr; gap: 14px;
+    align-items: baseline;
+  }
+  .step .n {
+    color: var(--paper);
+    background: var(--accent);
+    border-radius: 50%;
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 13px;
+    font-family: "Iowan Old Style", Georgia, serif;
+  }
+  .step b { color: var(--ink); font-weight: 600; }
+  .step .why {
+    color: var(--ink-soft); display: block; margin-top: 4px;
+    font-size: 14.5px; font-style: italic;
+  }
+
+  .kvs {
+    display: grid; grid-template-columns: max-content 1fr;
+    gap: 6px 22px; margin: 0 0 22px;
+    padding: 14px 18px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .kvs dt {
+    color: var(--accent);
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-variant: small-caps;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .kvs dd { margin: 0; color: var(--ink); }
+
+  hr {
+    border: 0;
+    text-align: center;
+    margin: 36px 0;
+    overflow: visible;
+    line-height: 0;
+  }
+  hr::before {
+    content: "✦  ✦  ✦";
+    color: var(--accent);
+    letter-spacing: 1em;
+    font-size: 13px;
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 1px 9px;
+    border: 1px solid var(--rule);
+    background: var(--mark);
+    border-radius: 99px;
+    font-size: 11px;
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-variant: small-caps;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .pill.ok { color: var(--ok); border-color: rgba(61,107,42,0.4); }
+  .pill.no { color: var(--no); border-color: rgba(138,42,42,0.4); }
+
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  a:hover { color: var(--accent-2); }
+  .arrow { color: var(--muted); }
+
+  /* Ascii diagrams */
+  .ascii {
+    font-family: "Iosevka", "JetBrains Mono", monospace;
+    font-size: 12.5px; line-height: 1.45;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 14px 18px;
+    margin: 0 0 22px;
+    white-space: pre;
+    color: var(--ink);
+    overflow-x: auto;
+  }
+  .ascii .y { background: #f3e2a9; padding: 0; }
+  .ascii .dim { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    main { padding: 36px 22px 64px; margin: 0; border: 0; box-shadow: none; }
+    body { background: var(--paper); }
+    h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>The preview paints a coloured rectangle</h1>
+<p class="lede">It isn't a bug in our renderer; it's the contents of tmux's pane buffer being shown faithfully. Here's what's happening and how to soften it.</p>
+
+<dl class="kvs">
+  <dt>pane buffer</dt><dd>tmux's per-pane 2-D array of <em>cells</em>; each cell holds a glyph and an SGR style.</dd>
+  <dt>capture-pane</dt><dd>tmux command that serialises the pane buffer back into ANSI bytes.</dd>
+  <dt>styled space</dt><dd>a cell whose character is <code>' '</code> but whose style is <em>not</em> default — e.g. a space with a yellow background.</dd>
+  <dt>vt.Emulator</dt><dd>The off-screen terminal we replay the bytes into to get our preview render.</dd>
+</dl>
+
+<h2>1 · The two pictures, side by side</h2>
+
+<p>Both of these came from the same vim/netrw window, the same theme, the same machine. The only difference is <em>which path</em> produced the picture.</p>
+
+<table>
+  <thead><tr><th>image #7 — preview</th><th>image #8 — live PTY</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Yellow extends to the right edge of every row, including the empty area past <code>.cache/</code>.</td>
+      <td>Yellow sits only behind each glyph (<code>.cache/</code>, <code>.claude/</code>, …); the host terminal background shows through to the right.</td>
+    </tr>
+    <tr>
+      <td>Bytes come from <code>tmux capture-pane -p -e</code>.</td>
+      <td>Bytes come straight from the PTY of <code>tmux attach-session</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Same emulator, same render function, same lipgloss container. The asymmetry isn't downstream — it's in the bytes upstream.</p>
+
+<h2>2 · Why tmux sends "styled spaces"</h2>
+
+<p>When vim opens a netrw buffer with a coloured theme, it doesn't just paint the glyphs. To get a clean rectangular feel, it issues an "erase to end of line" with the BG colour still active. Tmux's pane buffer dutifully records each of those cells as <em>space + yellow BG</em>.</p>
+
+<p>If you ask tmux to dump the pane (<code>capture-pane -e</code>), it walks every cell and emits its colour, including the trailing styled spaces. The emulator we feed those bytes to replays them exactly. The render now sees a row full of yellow-backed cells, so the rendered ANSI carries yellow all the way across.</p>
+
+<p>The <em>live</em> path never sees those bytes. <code>attach-session</code> hands us the live application, which only paints what it needs to update. The columns past <code>.cache/</code> in a redraw are usually untouched, so the cells stay at default style, and the host terminal background shows through.</p>
+
+<div class="ascii">vim → tmux pane buffer (one row, width = 20)
+┌──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┐
+│<span class="y">.</span>│<span class="y">c</span>│<span class="y">a</span>│<span class="y">c</span>│<span class="y">h</span>│<span class="y">e</span>│<span class="y">/</span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│<span class="y"> </span>│
+└──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┴──┘
+ └── glyphs ──┘└─────────── styled spaces ─────────────────┘
+                <span class="dim">(space char, yellow BG — the netrw theme)</span>
+
+capture-pane -e emits, roughly:
+  ESC[48;5;229m .cache/             ESC[0m
+                └──── trailing yellow ────┘
+</div>
+
+<div class="callout">
+  <strong>The cell buffer is honest.</strong> A "yellow space" is genuinely a cell on the screen. Tmux can't tell whether vim meant "fill the row" or "I just want this glyph"; both look identical at the cell level.
+</div>
+
+<h2>3 · The four-stage chain</h2>
+
+<div class="flow">
+  <div class="step"><span class="n">1</span><div>
+    <b>vim writes "<code>.cache/</code>" with EL (erase to end of line) under yellow BG.</b>
+    <span class="why">Most TUI apps do this to get a clean coloured panel without explicitly painting every cell.</span>
+  </div></div>
+  <div class="step"><span class="n">2</span><div>
+    <b>tmux records each affected cell into the pane buffer.</b>
+    <span class="why">Including the trailing spaces — they all carry the yellow BG SGR.</span>
+  </div></div>
+  <div class="step"><span class="n">3</span><div>
+    <b><code>capture-pane -e</code> serialises every cell back to ANSI.</b>
+    <span class="why">No heuristic to drop "trailing decorative space" — tmux can't know it's decorative.</span>
+  </div></div>
+  <div class="step"><span class="n">4</span><div>
+    <b>vt.Emulator replays the bytes, Render() emits ANSI with yellow across the row.</b>
+    <span class="why">From the emulator's point of view, the row genuinely has yellow cells. Honest behaviour.</span>
+  </div></div>
+</div>
+
+<h2>4 · Three ways to soften it</h2>
+
+<p>None of these recover what vim "meant"; they each pick a trade-off between fidelity and blending.</p>
+
+<h3>Option A — Trim trailing styled spaces</h3>
+
+<p>After <code>em.Write(raw)</code>, walk each row in the cell buffer and find the rightmost cell whose glyph is <em>not</em> a space. Reset every cell to the right of it back to default. Then call <code>Render()</code>.</p>
+
+<pre><code><span class="kw">for</span> y := <span class="num">0</span>; y &lt; rows; y++ {
+    last := -<span class="num">1</span>
+    <span class="kw">for</span> x := cols - <span class="num">1</span>; x &gt;= <span class="num">0</span>; x-- {
+        c := em.CellAt(x, y)
+        <span class="kw">if</span> c != <span class="kw">nil</span> &amp;&amp; c.Content != <span class="str">" "</span> {
+            last = x; <span class="kw">break</span>
+        }
+    }
+    <span class="kw">for</span> x := last + <span class="num">1</span>; x &lt; cols; x++ {
+        em.SetCell(x, y, &amp;uv.EmptyCell)
+    }
+}</code></pre>
+
+<ul>
+  <li><span class="pill ok">keeps</span> mid-line BGs (status bars where text sits between styled spaces), inline syntax highlight BGs.</li>
+  <li><span class="pill no">breaks</span> full-row coloured borders that don't end in a glyph (a fzf preview box drawn with spaces would lose its right edge).</li>
+</ul>
+
+<h3>Option B — Strip all backgrounds</h3>
+
+<p>Walk every cell, clear its style's BG field, keep FG / bold / italic / underline. The preview becomes "text-only colour".</p>
+
+<ul>
+  <li><span class="pill ok">cleanest blend</span> across every host theme. Preview always melts into the host BG.</li>
+  <li><span class="pill no">flattens</span> tmux status bars, vim's mode line, syntax BGs (diff blocks, search highlights), mc panels, htop bars — all lose their backgrounds.</li>
+</ul>
+
+<h3>Option C — Leave it alone</h3>
+
+<p>The current state. The preview faithfully reproduces what tmux says the pane contains. If you want the yellow gone, change your vim/tmux theme.</p>
+
+<ul>
+  <li><span class="pill ok">honest</span> — what you see in the preview matches what attaching will show.</li>
+  <li><span class="pill no">ugly</span> when an app paints a coloured panel that's smaller than the preview rect.</li>
+</ul>
+
+<h2>5 · The recommendation, and what it costs</h2>
+
+<p>Option <b>A</b> is the smallest hammer. It targets exactly the failure mode in image #7 (vim filling the row with decorative yellow spaces) while preserving the cases where colour matters (something sits between text on the same row).</p>
+
+<p>The known regression is full-row decorative borders. fzf's preview pane, midnight-commander's panels, and a few status bars that don't right-anchor a glyph will lose their right edge. In practice these are minority cases for our preview rectangle, which is usually showing a shell or editor.</p>
+
+<div class="callout warn">
+  <strong>What we will not do:</strong> reintroduce a <code>detectPreviewBG</code> heuristic that scans capture bytes for "the dark colour" and remaps it. That path was deleted last refactor; the trade-off here is per-row, not whole-pane.
+</div>
+
+<h2>6 · Footnote on why "set the default BG to host" doesn't work</h2>
+
+<p>A tempting fix: tell the emulator "the default background is the host terminal's colour" so styled-yellow spaces that match the host blend out. Two reasons it doesn't help:</p>
+
+<ul>
+  <li>We don't know the host BG. The terminal doesn't reliably report it; we'd be guessing and getting it wrong on every theme switch.</li>
+  <li>The yellow cells aren't claiming to be "default" — they have an explicit <em>SGR 48;5;229</em>. Setting the emulator's default to host doesn't suppress an explicit colour; it just changes what unstyled cells look like, which is already what we want.</li>
+</ul>
+
+<hr>
+<p style="color:var(--muted);font-size:12px">
+  Source: <code>internal/ui/commands.go</code>, <code>internal/ui/view.go</code>. Generated 2026-05-24.
+</p>
+
+</main>
+</body>
+</html>
