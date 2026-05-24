@@ -295,11 +295,28 @@ func CurrentProcess(session, window string) string {
 
 func CapturePane(session, window string) (string, error) {
 	target := session + ":" + SafeWindowName(window)
-	out, err := runTmux("capture-pane", "-p", "-e", "-t", target)
+	// -J preserves trailing whitespace and its styling. Without it tmux drops
+	// row-tail spaces even when they carry a non-default BG (e.g. nvim's
+	// gruvbox Normal hl), so the preview would lose the row-fill colour.
+	out, err := runTmux("capture-pane", "-p", "-e", "-J", "-t", target)
 	if err != nil {
 		return "", fmt.Errorf("capture pane %q: %w", target, err)
 	}
 	return out, nil
+}
+
+// PaneSize returns the current pane's columns and rows via tmux display-message.
+func PaneSize(session, window string) (int, int, error) {
+	target := session + ":" + SafeWindowName(window)
+	out, err := runTmux("display-message", "-p", "-t", target, "#{pane_width} #{pane_height}")
+	if err != nil {
+		return 0, 0, err
+	}
+	var cols, rows int
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d %d", &cols, &rows); err != nil {
+		return 0, 0, err
+	}
+	return cols, rows, nil
 }
 
 func CheckTmuxExists() error {

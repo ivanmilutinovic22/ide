@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -649,29 +648,92 @@ func (m Model) renderDetailsPane(width, height int) string {
 		)
 	}
 
-	topRows := []string{tabsLine, ""}
-	if strings.TrimSpace(selectedWindowCwd) != "" {
+	topRows := []string{tabsLine}
+	hasCwd := strings.TrimSpace(selectedWindowCwd) != ""
+	hasCmd := strings.TrimSpace(selectedWindowCmd) != ""
+	if hasCwd || hasCmd {
+		topRows = append(topRows, "")
+	}
+	if hasCwd {
 		topRows = append(topRows, infoLine("Cwd:", selectedWindowCwd))
 	}
-	if strings.TrimSpace(selectedWindowCmd) != "" {
+	if hasCmd {
 		topRows = append(topRows, infoLine("Cmd:", selectedWindowCmd))
 	}
-	if usingLiveWindows && m.previewSession == session && m.previewWindow == selectedWindowName && strings.TrimSpace(m.previewProcess) != "" {
-		topRows = append(topRows, infoLine("Running:", m.previewProcess))
-	}
-	topRows = append(topRows, "") // blank separator before preview
 
 	topVisualHeight := len(topRows)
 	contentHeight := height - 1
-	previewHeight := contentHeight - topVisualHeight - 1
+	previewHeight := contentHeight - topVisualHeight
 	if previewHeight < 0 {
 		previewHeight = 0
 	}
 
 	previewRows := m.renderPreviewRows(session, selectedWindowName, usingLiveWindows, contentWidth, previewHeight, theme)
 
-	allRows := append(topRows, previewRows...)
-	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), focused)
+	return assembleWindowsPane(width, height, title, topRows, previewRows, focused)
+}
+
+// assembleWindowsPane renders the windows details pane with chrome rows
+// (tabs + info lines) painted in pane BG, and preview rows emitted as bare
+// strings so the host terminal background bleeds through unpainted cells.
+// Bypasses paneBoxStyle's BG fill and applyPaneTextBackground.
+func assembleWindowsPane(width, height int, title string, chromeRows, previewRows []string, focused bool) string {
+	contentHeight := height - 1
+	if contentHeight < 0 {
+		contentHeight = 0
+	}
+	contentWidth := paneContentWidth(width)
+
+	baseStyle := paneStyle
+	if focused {
+		baseStyle = focusedPaneStyle
+	}
+	bgSeq := bgANSISeq(baseStyle.GetBackground())
+	const reset = "\x1b[0m"
+
+	chromeLine := func(line string) string {
+		if ansi.StringWidth(line) > contentWidth {
+			line = ansi.Cut(line, 0, contentWidth)
+		}
+		if pad := contentWidth - ansi.StringWidth(line); pad > 0 {
+			line = line + strings.Repeat(" ", pad)
+		}
+		if strings.Contains(line, "\x1b[") {
+			line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+bgSeq)
+		}
+		return bgSeq + " " + line + " " + reset
+	}
+	previewLine := func(line string) string {
+		if ansi.StringWidth(line) > contentWidth {
+			line = ansi.Cut(line, 0, contentWidth)
+		}
+		if pad := contentWidth - ansi.StringWidth(line); pad > 0 {
+			line = line + strings.Repeat(" ", pad)
+		}
+		return " " + line + " "
+	}
+
+	rows := make([]string, 0, contentHeight)
+	for _, r := range chromeRows {
+		rows = append(rows, chromeLine(r))
+	}
+	for _, r := range previewRows {
+		rows = append(rows, previewLine(r))
+	}
+	bareBlank := strings.Repeat(" ", width)
+	for len(rows) < contentHeight {
+		rows = append(rows, bareBlank)
+	}
+	if len(rows) > contentHeight {
+		rows = rows[:contentHeight]
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Background(paneStyle.GetBackground()).
+		Width(width).
+		Padding(0, 1)
+	titleLine := titleStyle.Render(title)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, strings.Join(rows, "\n"))
 }
 
 // renderTerminalPane renders the details pane in interactive terminal mode.
@@ -703,18 +765,17 @@ func (m Model) renderTerminalPane(width, height int, title string, env config.En
 		}
 	}
 
-	// Pad to exact height
-	previewBGColor := m.terminalBG
-	if previewBGColor == "" {
-		previewBGColor = theme.PaneBG
-	}
-	previewBGStyle := lipgloss.NewStyle().Background(lipgloss.Color(previewBGColor))
+	// Pad to exact height — bare spaces so the host terminal background
+	// shows through unpainted cells, same approach as assembleWindowsPane.
 	for len(terminalRows) < previewHeight {
-		terminalRows = append(terminalRows, previewBGStyle.Render(strings.Repeat(" ", contentWidth)))
+		terminalRows = append(terminalRows, strings.Repeat(" ", contentWidth))
 	}
 
-	allRows := append(topRows, terminalRows...)
-	return renderPaneWithTitle(width, height, title, strings.Join(allRows, "\n"), true)
+	// Don't route the terminal output through renderPaneWithTitle —
+	// applyPaneTextBackground would paint the pane BG over every empty cell
+	// emitted by the VT emulator, hiding the embedded app's own background.
+	// Use the same bare-row assembly as assembleWindowsPane (live preview).
+	return assembleWindowsPane(width, height, title, topRows, terminalRows, true)
 }
 
 // renderWindowTabs builds the tab bar string for window tabs.
@@ -839,7 +900,9 @@ func (m Model) renderWindowTabs(windows []string, session string, contentWidth i
 	return tabsLine
 }
 
-// renderPreviewRows renders the tmux pane capture content as display rows.
+// renderPreviewRows renders the vt-rendered tmux pane capture as display rows.
+// Cropping is bottom-aligned vertically and left-aligned horizontally; unused
+// cells emit no BG escape so the host terminal background shows through.
 func (m Model) renderPreviewRows(session, windowName string, usingLiveWindows bool, contentWidth, previewHeight int, theme uiTheme) []string {
 	previewRows := make([]string, 0, previewHeight)
 	hasPreview := usingLiveWindows &&
@@ -847,37 +910,15 @@ func (m Model) renderPreviewRows(session, windowName string, usingLiveWindows bo
 		m.previewWindow == windowName &&
 		strings.TrimSpace(m.previewContent) != ""
 
-	previewBGColor := m.previewBG
-	if previewBGColor == "" {
-		previewBGColor = m.terminalBG
-	}
-	if previewBGColor == "" {
-		previewBGColor = theme.PaneBG
-	}
-	previewBGStyle := lipgloss.NewStyle().Background(lipgloss.Color(previewBGColor))
-	previewBGSeq := colorToANSIBG(previewBGColor)
-
 	if hasPreview && previewHeight > 0 {
 		captureLines := strings.Split(strings.TrimRight(m.previewContent, "\n"), "\n")
-		start := len(captureLines) - previewHeight
-		if start < 0 {
-			start = 0
+		end := previewHeight
+		if end > len(captureLines) {
+			end = len(captureLines)
 		}
-		for _, line := range captureLines[start:] {
-			line = strings.TrimRight(line, " \t")
-			lineWidth := ansi.StringWidth(line)
-			if lineWidth > contentWidth {
+		for _, line := range captureLines[:end] {
+			if ansi.StringWidth(line) > contentWidth {
 				line = ansi.Cut(line, 0, contentWidth)
-				lineWidth = contentWidth
-			}
-			padding := max(0, contentWidth-lineWidth)
-			if strings.Contains(line, "\x1b[") {
-				line = injectBGIntoLine(line, previewBGSeq)
-				if padding > 0 {
-					line = line + previewBGSeq + strings.Repeat(" ", padding)
-				}
-			} else {
-				line = previewBGStyle.Render(padLineToWidth(line, contentWidth))
 			}
 			previewRows = append(previewRows, line)
 		}
@@ -887,7 +928,7 @@ func (m Model) renderPreviewRows(session, windowName string, usingLiveWindows bo
 	}
 
 	for len(previewRows) < previewHeight {
-		previewRows = append(previewRows, previewBGStyle.Render(strings.Repeat(" ", contentWidth)))
+		previewRows = append(previewRows, "")
 	}
 	return previewRows
 }
@@ -1282,34 +1323,6 @@ func (m Model) renderShortcutsPane(width, height int) string {
 	return renderModalWithBorderTitle(width, height, borderTitle, strings.Join(rows, "\n"))
 }
 
-var sgrRe = regexp.MustCompile(`\x1b\[([0-9;]*)m`)
-
-// colorToANSIBG converts a lipgloss color string to a raw ANSI background
-// escape sequence: "#rrggbb" → truecolor, "N" → 256-color palette.
-func colorToANSIBG(color string) string {
-	if len(color) == 7 && color[0] == '#' {
-		r, _ := strconv.ParseInt(color[1:3], 16, 32)
-		g, _ := strconv.ParseInt(color[3:5], 16, 32)
-		b, _ := strconv.ParseInt(color[5:7], 16, 32)
-		return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
-	}
-	if color != "" {
-		return fmt.Sprintf("\x1b[48;5;%sm", color)
-	}
-	return ""
-}
-
-// injectBGIntoLine prepends bgSeq to the line and re-injects it after every
-// SGR reset (\e[0m or \e[m) so the terminal bg doesn't bleed through resets.
-func injectBGIntoLine(line, bgSeq string) string {
-	if bgSeq == "" {
-		return line
-	}
-	line = strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+bgSeq)
-	line = strings.ReplaceAll(line, "\x1b[m", "\x1b[m"+bgSeq)
-	return bgSeq + line
-}
-
 // colorRGB converts a lipgloss color string to R,G,B components (0-255).
 func colorRGB(color string) (int, int, int) {
 	if len(color) == 7 && color[0] == '#' {
@@ -1367,45 +1380,4 @@ func darkenHex(color string, factor float64) string {
 		int(float64(g)*factor),
 		int(float64(b)*factor),
 	)
-}
-
-// colorLuminance returns perceptual luminance (0–255) of a lipgloss color string.
-func colorLuminance(color string) float64 {
-	r, g, b := colorRGB(color)
-	return 0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)
-}
-
-// detectPreviewBG scans ANSI escape sequences in captured terminal content and
-// returns the darkest explicit background color found, as a lipgloss-compatible
-// color string (e.g. "#1e1e2e" or "240"). Terminal base backgrounds are always
-// the darkest color; accent/highlight colors are brighter.
-// Returns "" if no explicit background colors are found.
-func detectPreviewBG(content string) string {
-	darkest, darkestLum := "", float64(256)
-	for _, match := range sgrRe.FindAllStringSubmatch(content, -1) {
-		params := strings.Split(match[1], ";")
-		for i := 0; i < len(params); i++ {
-			if params[i] != "48" {
-				continue
-			}
-			var color string
-			if i+2 < len(params) && params[i+1] == "5" {
-				color = params[i+2]
-				i += 2
-			} else if i+4 < len(params) && params[i+1] == "2" {
-				r, _ := strconv.Atoi(params[i+2])
-				g, _ := strconv.Atoi(params[i+3])
-				b, _ := strconv.Atoi(params[i+4])
-				color = fmt.Sprintf("#%02x%02x%02x", r, g, b)
-				i += 4
-			}
-			if color != "" {
-				if lum := colorLuminance(color); lum < darkestLum {
-					darkestLum = lum
-					darkest = color
-				}
-			}
-		}
-	}
-	return darkest
 }

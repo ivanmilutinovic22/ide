@@ -288,9 +288,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.captureCurrentWindowCmd()
 
 	case panePreviewMsg:
-		if msg.session != m.previewSession || msg.window != m.previewWindow {
-			m.previewBG = detectPreviewBG(msg.content)
-		}
 		m.previewContent = msg.content
 		m.previewSession = msg.session
 		m.previewWindow = msg.window
@@ -647,6 +644,8 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.startAttachSelected()
+	case "shift+enter", "alt+enter":
+		return m.enterTerminalMode()
 	default:
 		return m, nil
 	}
@@ -722,7 +721,7 @@ func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 		return m.startMoveWindow(-1)
 	case "L":
 		return m.startMoveWindow(1)
-	case "shift+enter":
+	case "shift+enter", "alt+enter":
 		return m.enterTerminalMode()
 	case "enter":
 		return m.startAttachSelected()

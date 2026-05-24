@@ -1,40 +1,24 @@
 package ui
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
-	"github.com/hinshun/vt10x"
 
 	"ide/internal/config"
 	"ide/internal/tmux"
 )
 
-// Attribute bitmask constants matching vt10x internals.
-const (
-	vtAttrReverse   = 1 << 0
-	vtAttrUnderline = 1 << 1
-	vtAttrBold      = 1 << 2
-	vtAttrGfx       = 1 << 3
-	vtAttrItalic    = 1 << 4
-	vtAttrBlink     = 1 << 5
-)
-
-// Color sentinel values from vt10x.
-const (
-	vtDefaultFG vt10x.Color = 1<<24 + 0
-	vtDefaultBG vt10x.Color = 1<<24 + 1
-)
-
 // EmbeddedTerminal manages a PTY running tmux attach with a virtual terminal emulator.
 type EmbeddedTerminal struct {
 	mu      sync.Mutex
-	vt      vt10x.Terminal
+	vt      *vt.Emulator
 	ptmx    *os.File
 	cmd     *exec.Cmd
 	cols    int
@@ -42,11 +26,7 @@ type EmbeddedTerminal struct {
 	session string
 	window  string
 	closed  bool
-	fgSGR   map[vt10x.Color]string
-	bgSGR   map[vt10x.Color]string
 }
-
-const sgrCacheCap = 4096
 
 // ptyReadMsg signals that new PTY output was processed into the virtual terminal.
 type ptyReadMsg struct{}
@@ -62,10 +42,8 @@ type terminalSessionReadyMsg struct {
 
 func newEmbeddedTerminal(cols, rows int) *EmbeddedTerminal {
 	return &EmbeddedTerminal{
-		cols:  cols,
-		rows:  rows,
-		fgSGR: make(map[vt10x.Color]string),
-		bgSGR: make(map[vt10x.Color]string),
+		cols: cols,
+		rows: rows,
 	}
 }
 
@@ -75,20 +53,25 @@ func (et *EmbeddedTerminal) Attach(session, window string) error {
 	et.mu.Lock()
 	defer et.mu.Unlock()
 
-	et.vt = vt10x.New(vt10x.WithSize(et.cols, et.rows))
+	et.vt = vt.NewEmulator(et.cols, et.rows)
 	et.session = session
 	et.window = window
 	et.closed = false
-	if et.fgSGR == nil {
-		et.fgSGR = make(map[vt10x.Color]string)
-	}
-	if et.bgSGR == nil {
-		et.bgSGR = make(map[vt10x.Color]string)
-	}
 
 	target := session + ":" + tmux.SafeWindowName(window)
 	cmd := exec.Command("tmux", "attach-session", "-t", target)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	// Strip TMUX/TMUX_PANE so the embedded client doesn't see itself as
+	// nested — tmux refuses to attach when $TMUX is set unless forced, which
+	// otherwise leaves the PTY blank.
+	env := os.Environ()
+	filtered := env[:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	cmd.Env = append(filtered, "TERM=xterm-256color")
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{
 		Rows: uint16(et.rows),
@@ -100,7 +83,31 @@ func (et *EmbeddedTerminal) Attach(session, window string) error {
 
 	et.cmd = cmd
 	et.ptmx = ptmx
+
+	// Pump emulator responses (DA1, DA2, DSR, etc.) back into the PTY input.
+	// tmux blocks drawing until it receives a Primary Device Attributes reply,
+	// so without this the pane stays blank forever.
+	go pumpEmulatorReplies(et.vt, ptmx)
+
 	return nil
+}
+
+// pumpEmulatorReplies reads bytes that the emulator writes in response to
+// terminal queries (e.g. \x1b[c → DA1) and forwards them to the PTY so the
+// attached process can read them as if from a real terminal.
+func pumpEmulatorReplies(em *vt.Emulator, ptmx *os.File) {
+	buf := make([]byte, 1024)
+	for {
+		n, err := em.Read(buf)
+		if n > 0 {
+			if _, werr := ptmx.Write(buf[:n]); werr != nil {
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // WriteInput sends raw bytes (keyboard input) to the PTY.
@@ -132,76 +139,28 @@ func (et *EmbeddedTerminal) Resize(cols, rows int) {
 	}
 }
 
-// Render converts the virtual terminal screen to an ANSI-styled string.
-// Includes cursor rendering as a reverse-video block at the cursor position.
+// Render returns the terminal screen as an ANSI-styled string, clipped to
+// width x height. Lines past the requested height are dropped from the bottom.
 func (et *EmbeddedTerminal) Render(width, height int) string {
 	et.mu.Lock()
 	defer et.mu.Unlock()
 	if et.vt == nil {
 		return ""
 	}
-
-	var sb strings.Builder
-	cols, rows := et.vt.Size()
-	if width < cols {
-		cols = width
+	rendered := et.vt.Render()
+	if rendered == "" {
+		return ""
 	}
-	if height < rows {
-		rows = height
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
 	}
-
-	cur := et.vt.Cursor()
-	showCursor := et.vt.CursorVisible()
-
-	for row := 0; row < rows; row++ {
-		if row > 0 {
-			sb.WriteByte('\n')
-		}
-		var prevFG, prevBG vt10x.Color
-		var prevMode int16
-		prevIsCursor := false
-		needReset := false
-
-		for col := 0; col < cols; col++ {
-			g := et.vt.Cell(col, row)
-			isCursor := showCursor && col == cur.X && row == cur.Y
-
-			// Emit new SGR when style or cursor state changes
-			if col == 0 || g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode || isCursor != prevIsCursor {
-				if needReset {
-					sb.WriteString("\x1b[0m")
-				}
-				if isCursor {
-					sb.WriteString("\x1b[7m")
-					if sgr := et.glyphSGR(g); sgr != "" {
-						sb.WriteString(sgr)
-					}
-					needReset = true
-				} else {
-					if sgr := et.glyphSGR(g); sgr != "" {
-						sb.WriteString(sgr)
-						needReset = true
-					} else {
-						needReset = false
-					}
-				}
-				prevFG = g.FG
-				prevBG = g.BG
-				prevMode = g.Mode
-				prevIsCursor = isCursor
-			}
-
-			ch := g.Char
-			if ch == 0 {
-				ch = ' '
-			}
-			sb.WriteRune(ch)
-		}
-		if needReset {
-			sb.WriteString("\x1b[0m")
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Cut(line, 0, width)
 		}
 	}
-	return sb.String()
+	return strings.Join(lines, "\n")
 }
 
 // Close tears down the PTY and process.
@@ -212,6 +171,10 @@ func (et *EmbeddedTerminal) Close() {
 		return
 	}
 	et.closed = true
+	if et.vt != nil {
+		// Unblocks pumpEmulatorReplies' em.Read so the goroutine exits.
+		_ = et.vt.Close()
+	}
 	if et.ptmx != nil {
 		et.ptmx.Close()
 		et.ptmx = nil
@@ -360,104 +323,6 @@ func (m Model) exitTerminalMode() Model {
 	}
 	m.status = focusedPaneStatus(m.focusPane)
 	return m
-}
-
-// glyphSGR produces an ANSI SGR escape sequence for a vt10x glyph's style.
-func (et *EmbeddedTerminal) glyphSGR(g vt10x.Glyph) string {
-	var params []string
-
-	if g.Mode&vtAttrBold != 0 {
-		params = append(params, "1")
-	}
-	if g.Mode&vtAttrItalic != 0 {
-		params = append(params, "3")
-	}
-	if g.Mode&vtAttrUnderline != 0 {
-		params = append(params, "4")
-	}
-	if g.Mode&vtAttrBlink != 0 {
-		params = append(params, "5")
-	}
-	if g.Mode&vtAttrReverse != 0 {
-		params = append(params, "7")
-	}
-
-	if fg := et.cachedColorSGR(g.FG, false); fg != "" {
-		params = append(params, fg)
-	}
-	if bg := et.cachedColorSGR(g.BG, true); bg != "" {
-		params = append(params, bg)
-	}
-
-	if len(params) == 0 {
-		return ""
-	}
-	return "\x1b[" + strings.Join(params, ";") + "m"
-}
-
-// cachedColorSGR returns the SGR fragment for a color, memoized per terminal.
-func (et *EmbeddedTerminal) cachedColorSGR(c vt10x.Color, bg bool) string {
-	cache := et.fgSGR
-	if bg {
-		cache = et.bgSGR
-	}
-	if cache != nil {
-		if s, ok := cache[c]; ok {
-			return s
-		}
-	}
-	s := colorSGR(c, bg)
-	if cache != nil {
-		if len(cache) >= sgrCacheCap {
-			if bg {
-				et.bgSGR = make(map[vt10x.Color]string)
-				cache = et.bgSGR
-			} else {
-				et.fgSGR = make(map[vt10x.Color]string)
-				cache = et.fgSGR
-			}
-		}
-		cache[c] = s
-	}
-	return s
-}
-
-// colorSGR converts a vt10x Color to SGR parameter string.
-func colorSGR(c vt10x.Color, bg bool) string {
-	if c == vtDefaultFG || c == vtDefaultBG {
-		return ""
-	}
-	base := 30
-	if bg {
-		base = 40
-	}
-
-	if c.ANSI() {
-		idx := int(c)
-		if idx < 8 {
-			return fmt.Sprintf("%d", base+idx)
-		}
-		// Bright colors (8-15)
-		return fmt.Sprintf("%d", base+60+idx-8)
-	}
-
-	// 256-color or RGB
-	n := uint32(c)
-	if n < 256 {
-		if bg {
-			return fmt.Sprintf("48;5;%d", n)
-		}
-		return fmt.Sprintf("38;5;%d", n)
-	}
-
-	// RGB: encoded as r<<16 | g<<8 | b
-	r := (n >> 16) & 0xff
-	g := (n >> 8) & 0xff
-	b := n & 0xff
-	if bg {
-		return fmt.Sprintf("48;2;%d;%d;%d", r, g, b)
-	}
-	return fmt.Sprintf("38;2;%d;%d;%d", r, g, b)
 }
 
 // keyToBytes converts a bubbletea key name to raw terminal escape bytes.

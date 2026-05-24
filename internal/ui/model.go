@@ -205,8 +205,6 @@ type Model struct {
 	previewSession        string
 	previewWindow         string
 	previewProcess        string
-	previewBG             string
-	terminalBG            string
 	windowProcessInfo     map[string]WindowProcessInfo // key: session:window
 	showFuzzySearch       bool
 	fuzzySearchQuery      textinput.Model
@@ -226,7 +224,7 @@ func newTextInput(prompt, placeholder string) textinput.Model {
 	return ti
 }
 
-func NewModel(terminalBG string) Model {
+func NewModel() Model {
 	m := Model{
 		sessions:          map[string]struct{}{},
 		sessionWindows:    map[string][]string{},
@@ -234,7 +232,6 @@ func NewModel(terminalBG string) Model {
 		focusPane:         focusPaneEnvironments,
 		themes:            defaultThemes(),
 		status:            "Loading environments...",
-		terminalBG:        terminalBG,
 	}
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")

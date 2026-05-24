@@ -50,10 +50,10 @@ func (f *flagSet) positional() []string      { return f.posArgs }
 // splitArgs walks args once and partitions them into flag tokens (to feed
 // flag.FlagSet) vs positional tokens. Recognised forms:
 //
-//   --name=value   -> single flag token
-//   --name value   -> two flag tokens (only when "name" is in known)
-//   --             -> end of flags; rest is positional
-//   anything else  -> positional
+//	--name=value   -> single flag token
+//	--name value   -> two flag tokens (only when "name" is in known)
+//	--             -> end of flags; rest is positional
+//	anything else  -> positional
 func splitArgs(args []string, known map[string]bool) (flagToks, pos []string, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]

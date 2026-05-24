@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/vt"
 
 	"ide/internal/config"
 	"ide/internal/tmux"
@@ -559,9 +560,26 @@ func execAttachCmd(target string) tea.Cmd {
 
 func capturePaneCmd(session, window string) tea.Cmd {
 	return func() tea.Msg {
-		content, _ := tmux.CapturePane(session, window)
 		process := tmux.CurrentProcess(session, window)
-		return panePreviewMsg{session: session, window: window, content: content, process: process}
+		cols, rows, err := tmux.PaneSize(session, window)
+		if err != nil || cols <= 0 || rows <= 0 {
+			return panePreviewMsg{session: session, window: window, process: process}
+		}
+		raw, _ := tmux.CapturePane(session, window)
+		em := vt.NewEmulator(cols, rows)
+		// tmux capture-pane writes bare LFs as line separators (no kernel tty
+		// in the loop to add CRs). Flip ANSI mode 20 (LNM) on so LF resets
+		// the column too — otherwise every line would staircase.
+		em.Write([]byte("\x1b[20h"))
+		// Strip the trailing LF: capture-pane terminates the last row with \n,
+		// which scrolls the buffer up by 1 and drops the top row.
+		em.Write([]byte(strings.TrimRight(raw, "\n")))
+		return panePreviewMsg{
+			session: session,
+			window:  window,
+			content: em.Render(),
+			process: process,
+		}
 	}
 }
 
