@@ -26,6 +26,8 @@ it, and showing you what's running across every project at a glance.
 - **Fuzzy search** — `Ctrl+P` opens a search across every window in every environment; `enter` jumps you straight there.
   Once attached, `prefix + a` opens the same search from inside the session.
 - **Embedded preview** — the right pane shows a live capture of the selected window without leaving `ide`.
+
+  ![embedded preview](./docs/images/preview.png)
 - **19 built-in themes**, switchable with `Ctrl+T`.
 
 ---
@@ -121,10 +123,30 @@ The config file is plain JSON. You can edit it directly or use the UI.
 Press **`?`** at any time for the in-app shortcuts overlay. Highlights:
 
 
-### Inside `tmux`
+---
 
-After `ide` creates a session it binds `prefix + a` to a popup that opens the same fuzzy search inside the running
-`tmux` — no need to detach to switch projects.
+## CLI & AI agents
+
+Everything the TUI does to your config is also exposed as a non-interactive
+CLI, so an AI coding agent (Claude Code, Codex, etc.) can manage your
+sessions on your behalf — add a worktree, swap a window's command, drop in
+an `agent [ai]` window — without driving the TUI.
+
+```bash
+ide --help                          # full command list
+ide env list                        # what's configured
+ide env add my-service --root ~/code/svc --template go-service
+ide env window add my-service agent --cmd claude
+ide template window set go-service editor --cmd "nvim ."
+```
+
+All commands read and write `~/.config/ide/environments.json`; the user
+still attaches in the TUI (or runs `r r` to rebuild a live session) once
+the layout is in place.
+
+**Example skill for AI agents:** [`docs/skills/manage-ide-sessions.md`](./docs/skills/manage-ide-sessions.md)
+— drop it into Claude Code's skills directory so the agent knows when and
+how to use these commands.
 
 ---
 
