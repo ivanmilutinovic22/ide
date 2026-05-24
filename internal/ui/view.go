@@ -570,7 +570,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 			statusColor := m.getWindowStatusColor(sessionStatus)
 			selectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color(statusColor)).
-				Background(lipgloss.Color(theme.SelectedBG)).
+				Background(lipgloss.Color(theme.SelectionBG)).
 				Bold(true)
 			ds := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(statusColor)).
@@ -585,7 +585,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 			defaultStyle = &ds
 		}
 
-		rows = append(rows, renderListRow(content, selected, contentWidth, selectedStyle, defaultStyle))
+		rows = append(rows, renderListRow(content, selected, contentWidth, theme, selectedStyle, defaultStyle))
 	}
 
 	empty := []string{"", "No environments configured.", "Press c to create one or edit ~/.config/ide/environments.json"}
@@ -600,7 +600,7 @@ func (m Model) renderTemplatesPane(width, height int) string {
 	rows := make([]string, 0, len(m.templates))
 	for idx, tpl := range m.templates {
 		content := fmt.Sprintf("%s %-15s (%d windows)", numPrefix(idx), tpl.Name, len(tpl.Windows))
-		rows = append(rows, renderListRow(content, idx == m.selectedTemplate, contentWidth, selectedLineStyle, nil))
+		rows = append(rows, renderListRow(content, idx == m.selectedTemplate, contentWidth, m.currentTheme(), selectedLineStyle, nil))
 	}
 
 	empty := []string{"", "No templates saved.", "Press c in this panel to add one."}
@@ -802,16 +802,19 @@ func (m Model) renderWindowTabs(windows []string, session string, contentWidth i
 		status := m.getWindowAgentStatus(session, w)
 		label := m.formatWindowLabel(w, status)
 		if i < 9 {
-			label = fmt.Sprintf("[%d] %s", i+1, label)
+			label = fmt.Sprintf("%d %s", i+1, label)
 		}
 
 		if i == m.selectedWindow {
 			if status != AgentStatusIdle {
+				// Selected + active agent: chip uses the status color as bg
+				// for the same inverse "pressed" look as the idle case.
 				statusColor := m.getWindowStatusColor(status)
 				sStyle := lipgloss.NewStyle().
-					Foreground(lipgloss.Color(statusColor)).
-					Background(lipgloss.Color(theme.PaneBG)).
-					Bold(true)
+					Foreground(lipgloss.Color(theme.PaneBG)).
+					Background(lipgloss.Color(statusColor)).
+					Bold(true).
+					Padding(0, 1)
 				tabs = append(tabs, sStyle.Render(label))
 			} else {
 				tabs = append(tabs, selectedWindowBoxStyle.Render(label))
@@ -821,7 +824,8 @@ func (m Model) renderWindowTabs(windows []string, session string, contentWidth i
 				statusColor := m.getWindowStatusColor(status)
 				sStyle := lipgloss.NewStyle().
 					Foreground(lipgloss.Color(statusColor)).
-					Background(lipgloss.Color(theme.PaneBG))
+					Background(lipgloss.Color(theme.PaneBG)).
+					Padding(0, 1)
 				tabs = append(tabs, sStyle.Render(label))
 			} else {
 				tabs = append(tabs, windowBoxStyle.Render(label))
@@ -831,7 +835,7 @@ func (m Model) renderWindowTabs(windows []string, session string, contentWidth i
 	sepStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.Muted))
-	sep := sepStyle.Render(" - ")
+	sep := sepStyle.Render(" ")
 	sepW := ansi.StringWidth(sep)
 
 	tabsLine := strings.Join(tabs, sep)

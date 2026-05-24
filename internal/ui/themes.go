@@ -48,9 +48,12 @@ func applyThemeStyles(theme uiTheme) {
 		Background(lipgloss.Color(theme.PaneBG)).
 		Foreground(lipgloss.Color(theme.AppFG)).
 		ColorWhitespace(true)
+	// Selected list row: soft wash bg + bold accent fg. The accent ▌ bar is
+	// painted separately by renderListRow so it survives status-color
+	// overrides applied at the callsite.
 	selectedLineStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.SelectedFG)).
-		Background(lipgloss.Color(theme.SelectedBG)).
+		Foreground(lipgloss.Color(theme.Accent)).
+		Background(lipgloss.Color(theme.SelectionBG)).
 		ColorWhitespace(true).
 		Bold(true)
 	activeSessionStyle = lipgloss.NewStyle().
@@ -80,13 +83,18 @@ func applyThemeStyles(theme uiTheme) {
 		Background(lipgloss.Color(theme.PaneBG)).
 		ColorWhitespace(true)
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Status)).Background(lipgloss.Color(theme.PaneBG))
+	// Window tabs: chip-style. Unselected — muted text on pane bg with
+	// horizontal padding so adjacent chips don't touch. Selected — inverse
+	// (accent bg, pane bg fg, bold) reads as a solid pressed tab.
 	windowBoxStyle = lipgloss.NewStyle().
 		Background(lipgloss.Color(theme.PaneBG)).
-		Foreground(lipgloss.Color(theme.Muted))
+		Foreground(lipgloss.Color(theme.Muted)).
+		Padding(0, 1)
 	selectedWindowBoxStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color(theme.PaneBG)).
-		Foreground(lipgloss.Color(theme.Accent)).
-		Bold(true)
+		Background(lipgloss.Color(theme.Accent)).
+		Foreground(lipgloss.Color(theme.PaneBG)).
+		Bold(true).
+		Padding(0, 1)
 }
 
 func applyTextInputTheme(ti *textinput.Model, theme uiTheme) {

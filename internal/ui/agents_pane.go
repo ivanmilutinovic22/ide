@@ -79,7 +79,7 @@ func (m Model) renderAgentsPane(width, height int) string {
 			statusColor := m.getWindowStatusColor(it.status)
 			selectedStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color(statusColor)).
-				Background(lipgloss.Color(theme.SelectedBG)).
+				Background(lipgloss.Color(theme.SelectionBG)).
 				Bold(true)
 			ds := lipgloss.NewStyle().
 				Foreground(lipgloss.Color(statusColor)).
@@ -90,7 +90,7 @@ func (m Model) renderAgentsPane(width, height int) string {
 			ds := activeSessionStyle
 			defaultStyle = &ds
 		}
-		rows = append(rows, renderListRow(content, selected, contentWidth, selectedStyle, defaultStyle))
+		rows = append(rows, renderListRow(content, selected, contentWidth, theme, selectedStyle, defaultStyle))
 	}
 
 	empty := []string{"", "No AI agents detected.", "Start a session with an [ai]-tagged window or run a known AI CLI."}

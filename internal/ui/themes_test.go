@@ -48,18 +48,19 @@ func TestNormalizeTheme(t *testing.T) {
 
 	t.Run("filled theme is left alone", func(t *testing.T) {
 		in := uiTheme{
-			Name:       "Custom",
-			AppBG:      "#000001",
-			AppFG:      "#fffffe",
-			PaneBG:     "#000002",
-			Border:     "#000003",
-			SelectedFG: "#000004",
-			SelectedBG: "#000005",
-			Active:     "#000006",
-			Inactive:   "#000007",
-			Accent:     "#000008",
-			Muted:      "#000009",
-			Status:     "#00000a",
+			Name:        "Custom",
+			AppBG:       "#000001",
+			AppFG:       "#fffffe",
+			PaneBG:      "#000002",
+			Border:      "#000003",
+			SelectedFG:  "#000004",
+			SelectedBG:  "#000005",
+			SelectionBG: "#00000b",
+			Active:      "#000006",
+			Inactive:    "#000007",
+			Accent:      "#000008",
+			Muted:       "#000009",
+			Status:      "#00000a",
 		}
 		got := normalizeTheme(in)
 		if got != in {

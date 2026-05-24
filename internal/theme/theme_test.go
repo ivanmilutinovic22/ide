@@ -26,6 +26,9 @@ func TestNormalize(t *testing.T) {
 		if got.SelectedBG != DefaultAppBG {
 			t.Errorf("SelectedBG should chain from Border, got %q", got.SelectedBG)
 		}
+		if got.SelectionBG != DefaultAppBG {
+			t.Errorf("SelectionBG should chain from SelectedBG, got %q", got.SelectionBG)
+		}
 		if got.Muted != DefaultAppFG {
 			t.Errorf("Muted should chain from AppFG, got %q", got.Muted)
 		}
@@ -42,18 +45,19 @@ func TestNormalize(t *testing.T) {
 
 	t.Run("filled theme is left alone", func(t *testing.T) {
 		in := Theme{
-			Name:       "Custom",
-			AppBG:      "#000001",
-			AppFG:      "#fffffe",
-			PaneBG:     "#000002",
-			Border:     "#000003",
-			SelectedFG: "#000004",
-			SelectedBG: "#000005",
-			Active:     "#000006",
-			Inactive:   "#000007",
-			Accent:     "#000008",
-			Muted:      "#000009",
-			Status:     "#00000a",
+			Name:        "Custom",
+			AppBG:       "#000001",
+			AppFG:       "#fffffe",
+			PaneBG:      "#000002",
+			Border:      "#000003",
+			SelectedFG:  "#000004",
+			SelectedBG:  "#000005",
+			SelectionBG: "#00000b",
+			Active:      "#000006",
+			Inactive:    "#000007",
+			Accent:      "#000008",
+			Muted:       "#000009",
+			Status:      "#00000a",
 		}
 		got := Normalize(in)
 		if got != in {

@@ -27,12 +27,22 @@ func numPrefix(idx int) string {
 	return "   "
 }
 
-// renderListRow applies the standard selection marker and styling to a
-// list-row content string. `defaultStyle == nil` means "no styling, just
-// pad to width" (used when the row should look like plain text).
-func renderListRow(content string, selected bool, contentWidth int, selectedStyle lipgloss.Style, defaultStyle *lipgloss.Style) string {
+// renderListRow paints a list row with the unified selection treatment:
+// the selected row gets a 1-column accent ▌ bar on the left and a soft
+// wash background across its full width. Unselected rows are flat —
+// no background tint, no marker — keeping the focus on the selected row.
+// `defaultStyle == nil` means "no styling, just pad to width".
+func renderListRow(content string, selected bool, contentWidth int, theme uiTheme, selectedStyle lipgloss.Style, defaultStyle *lipgloss.Style) string {
 	if selected {
-		return renderStyledPaneLine(selectedStyle, "▸ "+content, contentWidth)
+		// Paint the bar on whatever background the caller's selectedStyle
+		// uses, so status-color callers (cooking / awaiting-input) get
+		// the same bar treatment without clashing.
+		bg := selectedStyle.GetBackground()
+		bar := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(theme.Accent)).
+			Background(bg).
+			Render("▌")
+		return bar + renderStyledPaneLine(selectedStyle, " "+content, contentWidth-1)
 	}
 	if defaultStyle != nil {
 		return renderStyledPaneLine(*defaultStyle, "  "+content, contentWidth)
