@@ -2,6 +2,18 @@
 
 A terminal UI for managing **tmux**-based development environments.
 
+![ide demo](./docs/demo.gif)
+
+The gif above (`docs/demo.gif`) is generated from `docs/demo.tape` with [VHS](https://github.com/charmbracelet/vhs):
+
+```bash
+brew install vhs   # one-time
+make build
+vhs docs/demo.tape # writes docs/demo.gif
+```
+
+The tape runs inside a throwaway `$HOME` and `$TMUX_TMPDIR`, so your real ide config and tmux server stay untouched.
+
 ![ide screenshot](./docs/images/screenshot.png)
 
 ## Automated project setup
