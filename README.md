@@ -14,8 +14,6 @@ vhs docs/demo.tape # writes docs/demo.gif
 
 The tape runs inside a throwaway `$HOME` and `$TMUX_TMPDIR`, so your real ide config and tmux server stay untouched.
 
-![ide screenshot](./docs/images/screenshot.png)
-
 ## Automated project setup
 
 You define an session once — a root directory and a list of windows, each with its own command and working directory —
