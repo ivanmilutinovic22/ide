@@ -644,10 +644,12 @@ func (m Model) renderDetailsPane(width, height int) string {
 	if sw, ok := m.sessionWindows[session]; ok && len(sw) > 0 {
 		usingLiveWindows = true
 	}
-	if m.selectedWindow < len(env.Windows) {
-		selectedWindowCmd = env.Windows[m.selectedWindow].Cmd
-		if strings.TrimSpace(env.Windows[m.selectedWindow].Cwd) != "" {
-			selectedWindowCwd = env.Windows[m.selectedWindow].Cwd
+	// Resolve cmd/cwd by window name, not index: when live session windows
+	// are shown, their order/count can differ from the config templates.
+	if tmpl, ok := findWindowTemplate(env, selectedWindowName); ok {
+		selectedWindowCmd = tmpl.Cmd
+		if strings.TrimSpace(tmpl.Cwd) != "" {
+			selectedWindowCwd = tmpl.Cwd
 		}
 	}
 
@@ -1319,7 +1321,7 @@ func (m Model) renderShortcutsPane(width, height int) string {
 			continue
 		}
 
-		pad := keyColW - len(item.key)
+		pad := keyColW - ansi.StringWidth(item.key)
 		if pad < 1 {
 			pad = 1
 		}

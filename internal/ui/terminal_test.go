@@ -112,9 +112,9 @@ func TestVTTmuxLikeBootSequence(t *testing.T) {
 		"\x1b[H",      // cursor home
 		"\x1b[1;1H",   // cursor (1,1)
 		"hello from tmux",
-		"\x1b[24;1H",                 // cursor to status row
+		"\x1b[24;1H",                     // cursor to status row
 		"\x1b[7m[0] window-name\x1b[27m", // reverse-video status
-		"\x1b[?25h", // show cursor
+		"\x1b[?25h",                      // show cursor
 	}, "")
 	_, _ = em.Write([]byte(boot))
 

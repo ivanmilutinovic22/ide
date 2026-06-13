@@ -8,9 +8,9 @@ import (
 	"ide/internal/tmux"
 )
 
-// TestFuzzyMatch verifies the byte-level subsequence match used by the
+// TestFuzzyMatch verifies the rune-level subsequence match used by the
 // fuzzy search popup. The implementation in fuzzy.go is case-sensitive
-// and operates on raw bytes (no rune handling, no lowercasing).
+// (callers lowercase both sides before invoking it).
 func TestFuzzyMatch(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -26,12 +26,14 @@ func TestFuzzyMatch(t *testing.T) {
 		{"empty target with non-empty query does not match", "a", "", false},
 		{"prefix match", "ab", "abcdef", true},
 		{"suffix match", "ef", "abcdef", true},
-		// CHARACTERIZATION: fuzzyMatch is case-sensitive at the byte level.
-		// Callers (e.g. computeFuzzySearchResults) lowercase both sides before
+		// CHARACTERIZATION: fuzzyMatch is case-sensitive. Callers
+		// (e.g. computeFuzzySearchResults) lowercase both sides before
 		// invoking it, so the case-sensitivity is hidden in practice.
 		{"case sensitive: uppercase query, lowercase target", "ABC", "abc", false},
 		{"case sensitive: lowercase query, uppercase target", "abc", "ABC", false},
 		{"longer query than target", "abcd", "abc", false},
+		{"multibyte runes match as whole characters", "wörk", "my wörk dir", true},
+		{"multibyte query rune absent from target", "ö", "work", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -374,5 +376,33 @@ func TestExtractTags(t *testing.T) {
 				t.Errorf("tags: got %#v, want %#v", tags, tc.wantTags)
 			}
 		})
+	}
+}
+
+// TestOpenFuzzySearchCursorSkipsHeader verifies that opening the fuzzy
+// search popup lands the cursor on the first selectable (non-header) row,
+// so pressing Enter immediately attaches instead of being a no-op on the
+// env header that always occupies index 0.
+func TestOpenFuzzySearchCursorSkipsHeader(t *testing.T) {
+	env := config.Environment{
+		Name:    "alpha",
+		Windows: []config.WindowTemplate{{Name: "shell"}},
+	}
+	m := &Model{
+		environments:      []config.Environment{env},
+		sessions:          map[string]struct{}{},
+		sessionWindows:    map[string][]string{},
+		windowProcessInfo: map[string]WindowProcessInfo{},
+		fuzzySearchQuery:  newTextInput("/ ", ""),
+	}
+	m.rebuildFuzzyIndex()
+	m.openFuzzySearch()
+
+	if len(m.fuzzySearchResults) == 0 {
+		t.Fatal("expected fuzzy results, got none")
+	}
+	got := m.fuzzySearchResults[m.fuzzySearchCursor]
+	if got.IsHeader {
+		t.Fatalf("cursor parked on header row %d after open: %+v", m.fuzzySearchCursor, got)
 	}
 }

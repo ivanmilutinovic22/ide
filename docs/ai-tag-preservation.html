@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preserving [ai] Tags &amp; Automatic Agent Detection</title>
+<style>
+  :root {
+    /* Paper palette — warm off-white, ink-black, restrained accents. */
+    --paper:      #f6f1e7;
+    --sheet:      #fbf7ef;
+    --ink:        #1f1a14;
+    --ink-soft:   #4a4136;
+    --muted:      #7a6f5e;
+    --rule:       #c9bda6;
+    --rule-soft:  #ddd2bb;
+    --accent:     #6b3a1f;   /* burnt sienna — headings + links */
+    --accent-2:   #8a5a2b;
+    --mark:       #f0e4c2;
+    --ok:         #3d6b2a;
+    --no:         #8a2a2a;
+
+    --kw:         #6b3a1f;
+    --ident:      #2a4a6b;
+    --str:        #5a4a1f;
+    --comment:    #8a7f6e;
+    --num:        #6b4f1f;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background:
+      repeating-linear-gradient(
+        90deg,
+        rgba(0,0,0,0.012) 0,
+        rgba(0,0,0,0.012) 1px,
+        transparent 1px,
+        transparent 3px
+      ),
+      var(--paper);
+    color: var(--ink);
+    font: 16px/1.65 "Iowan Old Style", "Palatino Linotype", "Palatino",
+                    "Charter", Georgia, "Times New Roman", serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  main {
+    max-width: 720px;
+    margin: 32px auto;
+    padding: 72px 56px 96px;
+    background: var(--paper);
+    box-shadow:
+      0 0 0 1px var(--rule-soft),
+      0 18px 60px -30px rgba(50, 35, 15, 0.35);
+    border: 1px solid var(--rule-soft);
+  }
+
+  h1 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+    font-weight: 600;
+    font-size: 30px;
+    line-height: 1.2;
+    margin: 0 0 4px;
+    letter-spacing: -0.005em;
+    color: var(--ink);
+    text-align: center;
+  }
+  h1::after {
+    content: "";
+    display: block;
+    width: 60px;
+    height: 1px;
+    background: var(--accent);
+    margin: 14px auto 0;
+  }
+
+  h2 {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 40px 0 14px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--rule);
+    font-variant: small-caps;
+    letter-spacing: 0.04em;
+  }
+
+  h3 {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--accent-2);
+    margin: 22px 0 8px;
+    font-variant: small-caps;
+    letter-spacing: 0.06em;
+  }
+
+  p { margin: 0 0 14px; color: var(--ink); }
+  p + p { text-indent: 1.4em; }
+
+  .lede {
+    color: var(--ink-soft);
+    font-style: italic;
+    font-size: 17px;
+    text-align: center;
+    margin: 0 auto 40px;
+    max-width: 540px;
+    line-height: 1.55;
+  }
+
+  ul { margin: 0 0 16px; padding-left: 22px; }
+  ul li { margin-bottom: 5px; }
+  ul li::marker { color: var(--accent); }
+
+  code, pre, .mono {
+    font-family: "Iosevka", "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+    font-size: 13.5px;
+  }
+  code {
+    background: var(--mark);
+    padding: 0 4px;
+    border-radius: 2px;
+    color: var(--ink);
+    border: 1px solid rgba(107, 58, 31, 0.12);
+  }
+
+  pre {
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0;
+    padding: 14px 18px;
+    overflow-x: auto;
+    margin: 0 0 18px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.015);
+    line-height: 1.55;
+  }
+  pre code { background: transparent; padding: 0; border: 0; color: var(--ink); }
+
+  .kw   { color: var(--kw);   font-weight: 600; }
+  .id   { color: var(--ident); }
+  .str  { color: var(--str); }
+  .com  { color: var(--comment); font-style: italic; }
+  .num  { color: var(--num); }
+
+  .callout {
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    background: var(--sheet);
+    padding: 14px 18px;
+    margin: 14px 0 22px;
+    font-size: 15px;
+    color: var(--ink-soft);
+  }
+  .callout strong { color: var(--accent); }
+  .callout.warn { border-left-color: var(--accent-2); }
+  .callout.warn strong { color: var(--accent-2); }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 0 0 22px;
+    font-size: 14px;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+  }
+  th, td {
+    text-align: left; padding: 9px 12px;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+  }
+  thead tr { background: var(--mark); }
+  th {
+    color: var(--accent); font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    font-variant: small-caps;
+    border-bottom: 1px solid var(--rule);
+  }
+  td.mono { white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 0; }
+
+  .tree {
+    font-family: "Iosevka", "JetBrains Mono", monospace;
+    font-size: 13px; line-height: 1.85;
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 14px 20px;
+    margin: 0 0 22px;
+    white-space: pre;
+    color: var(--ink);
+  }
+  .tree .dir  { color: var(--accent); font-weight: 600; }
+  .tree .file { color: var(--ink); }
+  .tree .note { color: var(--muted); font-style: italic; }
+
+  .flow { display: grid; gap: 10px; grid-template-columns: 1fr; margin: 14px 0 22px; }
+  .step {
+    background: var(--sheet);
+    border: 1px solid var(--rule);
+    padding: 12px 16px;
+    display: grid; grid-template-columns: 32px 1fr; gap: 14px;
+    align-items: baseline;
+  }
+  .step .n {
+    color: var(--paper);
+    background: var(--accent);
+    border-radius: 50%;
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 13px;
+    font-family: "Iowan Old Style", Georgia, serif;
+  }
+  .step b { color: var(--ink); font-weight: 600; }
+  .step .why {
+    color: var(--ink-soft); display: block; margin-top: 4px;
+    font-size: 14.5px; font-style: italic;
+  }
+
+  .kvs {
+    display: grid; grid-template-columns: max-content 1fr;
+    gap: 6px 22px; margin: 0 0 22px;
+    padding: 14px 18px;
+    background: var(--sheet); border: 1px solid var(--rule);
+  }
+  .kvs dt {
+    color: var(--accent);
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-variant: small-caps;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .kvs dd { margin: 0; color: var(--ink); }
+
+  hr {
+    border: 0;
+    text-align: center;
+    margin: 36px 0;
+    overflow: visible;
+    line-height: 0;
+  }
+  hr::before {
+    content: "✦  ✦  ✦";
+    color: var(--accent);
+    letter-spacing: 1em;
+    font-size: 13px;
+  }
+
+  .pill {
+    display: inline-block;
+    padding: 1px 9px;
+    border: 1px solid var(--rule);
+    background: var(--mark);
+    border-radius: 99px;
+    font-size: 11px;
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-variant: small-caps;
+    letter-spacing: 0.06em;
+    color: var(--ink-soft);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .pill.ok { color: var(--ok); border-color: rgba(61,107,42,0.4); }
+  .pill.no { color: var(--no); border-color: rgba(138,42,42,0.4); }
+
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  a:hover { color: var(--accent-2); }
+  .arrow { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    main { padding: 36px 22px 64px; margin: 0; border: 0; box-shadow: none; }
+    body { background: var(--paper); }
+    h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Preserving <code>[ai]</code> Tags &amp; Automatic Agent Detection</h1>
+<p class="lede">How a lossy serializer silently stripped every AI tag from the config, and why most windows no longer need the tag at all.</p>
+
+<dl class="kvs">
+  <dt>[ai] tag</dt><dd>A marker on a window template that opts the window into agent-status tracking (cooking&nbsp;● / awaiting&nbsp;input&nbsp;◆).</dd>
+  <dt>window spec</dt><dd>The one-line text form used in edit dialogs: <code>name [tag]=cmd|cwd; …</code></dd>
+  <dt>KnownTools</dt><dd>The set of process names recognised as AI-agent CLIs (<code>claude</code>, <code>opencode</code>, <code>tuai</code>, …).</dd>
+</dl>
+
+<h2>1 · The Bug: a Lossy Round-Trip</h2>
+
+<p>Tags live in the config as a proper field — <code>WindowTemplate.Tags</code>. But every edit dialog works on the <em>text</em> form of the windows. Opening the dialog serializes the structs to a string; saving parses the string back. The serializer, <code>formatWindowSpec</code>, emitted name, command, and working directory — and never the tags.</p>
+
+<div class="flow">
+  <div class="step"><span class="n">1</span><div>
+    <b>Config holds</b> <code>{Name:&nbsp;"agent", Cmd:&nbsp;"claude", Tags:&nbsp;["ai"]}</code>
+  </div></div>
+  <div class="step"><span class="n">2</span><div>
+    <b>Press <code>e</code> to edit</b> — form pre-fills via <code>formatWindowSpec</code> <span class="arrow">→</span> <code>agent=claude</code>
+    <span class="why">The <code>[ai]</code> is already gone here; the user sees nothing wrong.</span>
+  </div></div>
+  <div class="step"><span class="n">3</span><div>
+    <b>Press Enter to save</b> — <code>parseWindowSpec</code> reads it back <span class="arrow">→</span> <code>Tags:&nbsp;nil</code> written to config.
+  </div></div>
+  <div class="step"><span class="n">4</span><div>
+    <b>Restart the session</b> — restart faithfully rebuilds from config, but the config no longer has the tag.
+    <span class="why">Restart was never the culprit; it preserved exactly what the edit had already destroyed.</span>
+  </div></div>
+</div>
+
+<p>The same round-trip sits under template editing, so a template edited even once lost its tags — and every environment created from it afterwards inherited the loss. That is why "creating a session from a template" appeared broken too.</p>
+
+<h3>The fix</h3>
+
+<p><code>formatWindowSpec</code> now emits tags right after the name, in the exact syntax the parser already accepts:</p>
+
+<pre><code><span class="kw">for</span> _, t := <span class="kw">range</span> w.Tags {
+    <span class="kw">if</span> t = strings.TrimSpace(t); t != <span class="str">""</span> {
+        name += <span class="str">" ["</span> + t + <span class="str">"]"</span>
+    }
+}
+<span class="com">// "agent [ai]=claude|./api" — parses back to the identical struct</span></code></pre>
+
+<p>A regression test round-trips <span class="mono">structs → spec → structs</span> and asserts deep equality, so the serializer and parser can no longer drift apart silently.</p>
+
+<h2>2 · The Second Leak: Tags Hiding in Names</h2>
+
+<p>The built-in default window was defined as <code>{Name:&nbsp;"ai-assistant&nbsp;[ai]", Cmd:&nbsp;"opencode"}</code> — the tag embedded <em>inside the name string</em>, where <code>HasTag</code> never looks. Older user configs carry the same pattern.</p>
+
+<p>Two changes close this:</p>
+
+<ul>
+  <li>The default is now a proper struct: <code>{Name:&nbsp;"ai-assistant", Cmd:&nbsp;"opencode", Tags:&nbsp;["ai"]}</code>.</li>
+  <li><code>normalizeWindows</code> in <code>internal/config</code> runs on every load and <em>migrates</em>: any <code>[tag]</code> token found in a window name is lifted into the <code>Tags</code> field (case-insensitively deduplicated) and stripped from the name.</li>
+</ul>
+
+<div class="callout">
+  <strong>Self-healing:</strong> existing <code>environments.json</code> files need no manual edit — the migration happens transparently the next time the app reads the config.
+</div>
+
+<h2>3 · Automatic Recognition — No Tag Needed</h2>
+
+<p>A window now counts as an AI window if <em>any</em> of three signals fires, checked in this order:</p>
+
+<table>
+  <thead><tr><th>signal</th><th>example</th><th>when it helps</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><span class="pill ok">tag</span> template has <code>[ai]</code></td>
+      <td class="mono">agent [ai]=zsh</td>
+      <td>Explicit opt-in, e.g. a shell window where you sometimes launch an agent.</td>
+    </tr>
+    <tr>
+      <td><span class="pill ok">cmd</span> template command is a known CLI</td>
+      <td class="mono">agent=claude</td>
+      <td><em>New.</em> Recognised instantly at session creation — no tag, no waiting for polling.</td>
+    </tr>
+    <tr>
+      <td><span class="pill ok">process</span> live foreground process is a known CLI</td>
+      <td class="mono">$ opencode ↵</td>
+      <td>Ad-hoc: you start an agent by hand in a plain window.</td>
+    </tr>
+  </tbody>
+</table>
+
+<pre><code><span class="com">// internal/ui/agent_status.go</span>
+<span class="kw">func</span> (m Model) <span class="id">isAIWindow</span>(env config.Environment, windowName, currentProcess <span class="kw">string</span>) <span class="kw">bool</span> {
+    <span class="kw">if</span> tmpl, ok := findWindowTemplate(env, windowName); ok {
+        <span class="kw">if</span> HasTag(tmpl, <span class="str">"ai"</span>) || isAIToolProcess(tmpl.Cmd) {
+            <span class="kw">return</span> <span class="kw">true</span>
+        }
+    }
+    <span class="kw">return</span> isAIToolProcess(currentProcess)
+}</code></pre>
+
+<p>The same three-way check was applied to the two other detection sites that had their own logic: the 500&nbsp;ms polling-eligibility loop in <code>commands.go</code> and the search popup's one-shot status pass in <code>search.go</code>.</p>
+
+<h3>Expanded KnownTools</h3>
+
+<p>Detection matches the last path component of the foreground command, case-insensitively, arguments stripped — so <code>/usr/local/bin/claude --resume</code> matches <code>claude</code>. Newly added:</p>
+
+<table>
+  <thead><tr><th>name</th><th>tool</th></tr></thead>
+  <tbody>
+    <tr><td class="mono">tuai</td><td>tuai terminal AI agent</td></tr>
+    <tr><td class="mono">amp</td><td>Sourcegraph Amp CLI</td></tr>
+    <tr><td class="mono">qwen</td><td>QwenLM qwen-code CLI</td></tr>
+    <tr><td class="mono">droid</td><td>Factory droid CLI</td></tr>
+    <tr><td class="mono">auggie</td><td>Augment Code CLI</td></tr>
+  </tbody>
+</table>
+
+<p><code>claude</code>, <code>opencode</code>, <code>codex</code>, <code>aider</code>, <code>gemini</code>, <code>copilot</code> and a dozen others were already in the list.</p>
+
+<h2>4 · What Changed Where</h2>
+
+<div class="tree"><span class="dir">internal/</span>
+├── <span class="dir">ui/</span>
+│   ├── <span class="file">update.go</span>        <span class="note">← formatWindowSpec now emits [tags]</span>
+│   ├── <span class="file">agent_status.go</span>  <span class="note">← isAIWindow checks template Cmd</span>
+│   ├── <span class="file">commands.go</span>      <span class="note">← polling eligibility, same 3-way check</span>
+│   └── <span class="file">search.go</span>        <span class="note">← search popup, same 3-way check</span>
+├── <span class="dir">config/</span>
+│   └── <span class="file">config.go</span>        <span class="note">← name→Tags migration, fixed default window</span>
+└── <span class="dir">agentstatus/</span>
+    └── <span class="file">agentstatus.go</span>   <span class="note">← +tuai, amp, qwen, droid, auggie</span>
+</div>
+
+<div class="callout warn">
+  <strong>One transitional quirk:</strong> sessions started <em>before</em> the fix have tmux windows literally named <code>ai-assistant-[ai]</code>. The cleaned-up template no longer matches that name, so tag/cmd detection misses — but process detection still catches the running <code>opencode</code>, and a session restart recreates the window with the clean name.
+</div>
+
+<h2>5 · Tests</h2>
+
+<ul>
+  <li><code>TestFormatWindowSpecRoundTripPreservesTags</code> — serialize → parse → deep-equal, the exact loop that used to lose tags.</li>
+  <li><code>TestNormalizeWindowsLiftsNameTags</code> — legacy <code>"agent [ai] [db]"</code> names migrate into <code>Tags</code> without duplicates.</li>
+  <li><code>TestModelIsAIWindow</code> — extended with cmd-based cases (<code>Cmd:&nbsp;"claude"</code> → AI, <code>Cmd:&nbsp;"make watch"</code> → not).</li>
+  <li><code>TestIsAITool</code> — covers the new tool names.</li>
+</ul>
+
+<p>Full suite: 223 tests passing across 7 packages.</p>
+
+<hr>
+<p style="color:var(--muted);font-size:12px">
+  Source: <code>internal/ui/update.go</code>, <code>internal/ui/agent_status.go</code>, <code>internal/config/config.go</code>, <code>internal/agentstatus/agentstatus.go</code>. Generated 2026-06-12.
+</p>
+
+</main>
+</body>
+</html>

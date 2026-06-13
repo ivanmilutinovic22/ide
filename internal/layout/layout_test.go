@@ -92,8 +92,8 @@ func TestTerminalPreviewHeight(t *testing.T) {
 	tests := []struct {
 		height, want int
 	}{
-		{0, 1},   // floored
-		{5, 1},   // floored after reservation
+		{0, 1}, // floored
+		{5, 1}, // floored after reservation
 		{6, 1},
 		{7, 1},
 		{8, 2},

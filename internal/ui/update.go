@@ -1258,19 +1258,21 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.createName.Blur()
 		m.createRoot.Blur()
 		m.createCustom.Blur()
+		m.rootSuggestionArmed = false
 		m.status = "Create canceled."
 		return m, nil
 	case "tab":
-		// On root field, let textinput handle tab for path autocomplete
-		if m.createField == createFieldRoot {
-			break // fall through to textinput delegate
+		// On root field with suggestions, cycle to the next one; enter
+		// accepts. With nothing to cycle, tab moves to the next field.
+		if m.createField == createFieldRoot && m.rootSuggestionsCyclable() {
+			break // fall through to textinput delegate (NextSuggestion)
 		}
 		m.shiftCreateField(1)
 		m.focusCreateField()
 		return m, nil
 	case "down":
 		// On root field with suggestions, cycle to next suggestion
-		if m.createField == createFieldRoot {
+		if m.createField == createFieldRoot && m.rootSuggestionsCyclable() {
 			break // fall through to textinput delegate (NextSuggestion)
 		}
 		m.shiftCreateField(1)
@@ -1278,13 +1280,16 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "up":
 		// On root field with suggestions, cycle to prev suggestion
-		if m.createField == createFieldRoot {
+		if m.createField == createFieldRoot && m.rootSuggestionsCyclable() {
 			break // fall through to textinput delegate (PrevSuggestion)
 		}
 		m.shiftCreateField(-1)
 		m.focusCreateField()
 		return m, nil
 	case "shift+tab":
+		if m.createField == createFieldRoot && m.rootSuggestionsCyclable() {
+			break // fall through to textinput delegate (PrevSuggestion)
+		}
 		m.shiftCreateField(-1)
 		m.focusCreateField()
 		return m, nil
@@ -1299,6 +1304,23 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "enter":
+		// On root field, accept the highlighted path suggestion when it
+		// completes a partially-typed component or was tab-selected.
+		// Accepting only on those conditions keeps enter from drilling
+		// into subdirectory ghost text forever: once a directory is
+		// accepted (value ends in "/"), plain enter advances the form.
+		if m.createField == createFieldRoot {
+			val := m.createRoot.Value()
+			sugg := m.createRoot.CurrentSuggestion()
+			if sugg != "" && sugg != val && (m.rootSuggestionArmed || !strings.HasSuffix(val, "/")) {
+				m.createRoot.SetValue(sugg)
+				m.createRoot.CursorEnd()
+				m.rootSuggestionArmed = false
+				m.updatePathSuggestions(&m.createRoot)
+				return m, nil
+			}
+			m.rootSuggestionArmed = false
+		}
 		if !m.isCreateLastField() {
 			m.shiftCreateField(1)
 			m.focusCreateField()
@@ -1352,10 +1374,27 @@ func (m Model) updateCreateMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case createFieldRoot:
 		m.createRoot, cmd = m.createRoot.Update(msg)
 		m.updatePathSuggestions(&m.createRoot)
+		switch msg.String() {
+		case "tab", "shift+tab", "up", "down", "ctrl+n", "ctrl+p":
+			// User highlighted a suggestion — arm enter to accept it.
+			m.rootSuggestionArmed = m.rootSuggestionsCyclable()
+		default:
+			m.rootSuggestionArmed = false
+		}
 	case createFieldCustomWindows:
 		m.createCustom, cmd = m.createCustom.Update(msg)
 	}
 	return m, cmd
+}
+
+// rootSuggestionsCyclable reports whether the create-form root input has a
+// path suggestion the user could cycle to that isn't already typed in full.
+func (m Model) rootSuggestionsCyclable() bool {
+	matched := m.createRoot.MatchedSuggestions()
+	if len(matched) == 0 {
+		return false
+	}
+	return len(matched) > 1 || matched[0] != m.createRoot.Value()
 }
 
 // updatePathSuggestions feeds filesystem path completions to a textinput's
@@ -1689,9 +1728,9 @@ func shortcutsList() []shortcutItem {
 		{"esc", "close search", false, ""},
 
 		{desc: "Create / Edit", isHeader: true},
-		{"tab", "next field", false, ""},
+		{"tab", "next field / cycle path suggestion", false, ""},
 		{"←/→", "cycle template", false, ""},
-		{"enter", "confirm", false, ""},
+		{"enter", "confirm / accept suggestion", false, ""},
 		{"esc", "cancel", false, ""},
 
 		{desc: "Theme Picker", isHeader: true},
@@ -1713,6 +1752,11 @@ func formatWindowSpec(windows []config.WindowTemplate) string {
 		}
 		cmd := strings.TrimSpace(w.Cmd)
 		cwd := strings.TrimSpace(w.Cwd)
+		for _, t := range w.Tags {
+			if t = strings.TrimSpace(t); t != "" {
+				name += " [" + t + "]"
+			}
+		}
 		entry := name
 		if cmd != "" || cwd != "" {
 			entry = name + "=" + cmd
@@ -1822,7 +1866,9 @@ func parseWindowEntry(entry string) (config.WindowTemplate, error) {
 // findWindowTemplate finds a config window template by name within an environment.
 func findWindowTemplate(env config.Environment, windowName string) (config.WindowTemplate, bool) {
 	for _, w := range env.Windows {
-		if w.Name == windowName {
+		// Live tmux windows carry the sanitized name (spaces become
+		// dashes), so match against both forms.
+		if w.Name == windowName || tmux.SafeWindowName(w.Name) == windowName {
 			return w, true
 		}
 	}

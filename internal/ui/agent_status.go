@@ -18,11 +18,13 @@ func detectAgentStatus(current ProcessInfo, currentStatus AgentStatus, lowActivi
 }
 
 // isAIWindow reports whether the window should be tracked as an AI agent
-// window — either because the template has the [ai] tag or because its
-// current foreground process is a known AI CLI.
+// window — because the template has the [ai] tag, the template's command is
+// a known AI CLI, or its current foreground process is a known AI CLI.
 func (m Model) isAIWindow(env config.Environment, windowName, currentProcess string) bool {
-	if tmpl, ok := findWindowTemplate(env, windowName); ok && HasTag(tmpl, "ai") {
-		return true
+	if tmpl, ok := findWindowTemplate(env, windowName); ok {
+		if HasTag(tmpl, "ai") || isAIToolProcess(tmpl.Cmd) {
+			return true
+		}
 	}
 	return isAIToolProcess(currentProcess)
 }

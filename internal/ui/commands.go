@@ -619,7 +619,7 @@ func (m Model) captureCurrentWindowCmd() tea.Cmd {
 		for _, w := range ws {
 			cachedCmd := m.windowProcessInfo[windowKey(s, w)].Command
 			tmpl, hasTmpl := findWindowTemplate(e, w)
-			isAI := (hasTmpl && HasTag(tmpl, "ai")) || isAIToolProcess(cachedCmd)
+			isAI := (hasTmpl && (HasTag(tmpl, "ai") || isAIToolProcess(tmpl.Cmd))) || isAIToolProcess(cachedCmd)
 			if isAI {
 				cmds = append(cmds, checkAgentStatusCmd(s, w, cachedCmd))
 			}

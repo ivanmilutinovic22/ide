@@ -60,6 +60,11 @@ var KnownTools = map[string]struct{}{
 	"tgpt":         {}, // aandrew-me/tgpt
 	"chatgpt":      {}, // j178/chatgpt and similar interactive CLIs
 	"q":            {}, // Amazon Q Developer CLI (q chat)
+	"tuai":         {}, // tuai terminal AI agent
+	"amp":          {}, // Sourcegraph Amp CLI
+	"qwen":         {}, // QwenLM/qwen-code CLI
+	"droid":        {}, // Factory droid CLI
+	"auggie":       {}, // Augment Code CLI
 }
 
 // IsAITool reports whether name is a known AI-agent CLI. Accepts paths and

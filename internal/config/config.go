@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -81,10 +82,33 @@ func EnsureExists() error {
 	if err != nil {
 		return fmt.Errorf("marshal default config: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := writeFileAtomic(path, b); err != nil {
 		return fmt.Errorf("write default config: %w", err)
 	}
 	return nil
+}
+
+// writeFileAtomic writes b to path via a temp file in the same directory
+// followed by a rename, so a crash mid-write can never leave a truncated
+// or half-written config behind.
+func writeFileAtomic(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".environments-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func Load() ([]Environment, error) {
@@ -210,7 +234,7 @@ func saveAllLocked(data Data) error {
 	if err != nil {
 		return fmt.Errorf("marshal config json: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := writeFileAtomic(path, b); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
 	return nil
@@ -278,6 +302,11 @@ func normalizeTemplate(template *Template) {
 	template.Windows = normalizeWindows(template.Windows)
 }
 
+// nameTagRe matches [tag] tokens embedded in a window name. Older configs
+// (and the legacy defaults) stored tags inline in the name; normalizeWindows
+// lifts them into the Tags field so detection keeps working.
+var nameTagRe = regexp.MustCompile(`\[(\w+)\]`)
+
 func normalizeWindows(windows []WindowTemplate) []WindowTemplate {
 	if len(windows) == 0 {
 		return []WindowTemplate{{Name: "shell"}}
@@ -288,12 +317,27 @@ func normalizeWindows(windows []WindowTemplate) []WindowTemplate {
 		w.Name = strings.TrimSpace(w.Name)
 		w.Cmd = strings.TrimSpace(w.Cmd)
 		w.Cwd = strings.TrimSpace(w.Cwd)
+		for _, match := range nameTagRe.FindAllStringSubmatch(w.Name, -1) {
+			if !hasTagFold(w.Tags, match[1]) {
+				w.Tags = append(w.Tags, match[1])
+			}
+		}
+		w.Name = strings.TrimSpace(nameTagRe.ReplaceAllString(w.Name, ""))
 		if w.Name == "" {
 			w.Name = fmt.Sprintf("window-%d", len(out)+1)
 		}
 		out = append(out, w)
 	}
 	return out
+}
+
+func hasTagFold(tags []string, tag string) bool {
+	for _, t := range tags {
+		if strings.EqualFold(t, tag) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePath(value string) string {
@@ -315,7 +359,7 @@ func legacyDefaultWindows() []WindowTemplate {
 		{Name: "editor", Cmd: "nvim ."},
 		{Name: "terminal"},
 		{Name: "lazygit", Cmd: "lazygit"},
-		{Name: "ai-assistant [ai]", Cmd: "opencode"},
+		{Name: "ai-assistant", Cmd: "opencode", Tags: []string{"ai"}},
 	}
 }
 

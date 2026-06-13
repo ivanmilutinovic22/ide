@@ -18,17 +18,24 @@ func (m *Model) openFuzzySearch() tea.Cmd {
 	m.fuzzySearchCursor = 0
 	m.fuzzySearchQuery.Focus()
 	m.fuzzySearchResults = m.computeFuzzySearchResults()
+	// Results start with an env header row; land the cursor on the first
+	// selectable row so enter works immediately.
+	m.normalizeFuzzySearchCursor()
 	return textinput.Blink
 }
 
 func fuzzyMatch(query, target string) bool {
+	q := []rune(query)
 	qi := 0
-	for i := 0; i < len(target) && qi < len(query); i++ {
-		if target[i] == query[qi] {
+	for _, r := range target {
+		if qi == len(q) {
+			break
+		}
+		if r == q[qi] {
 			qi++
 		}
 	}
-	return qi == len(query)
+	return qi == len(q)
 }
 
 func (m *Model) rebuildFuzzyIndex() {
@@ -212,6 +219,15 @@ func (m Model) updateFuzzySearchMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.selectedEnv = item.EnvIndex
 			m.selectedWindow = item.WindowIndex
+			// The cached index can be stale if session windows changed
+			// since the index was built — re-resolve by name, like the
+			// agents pane does.
+			for i, w := range m.currentWindowNames() {
+				if w == item.WindowName {
+					m.selectedWindow = i
+					break
+				}
+			}
 			m.showFuzzySearch = false
 			m.fuzzySearchQuery.Blur()
 			m.focusPane = focusPaneWindows

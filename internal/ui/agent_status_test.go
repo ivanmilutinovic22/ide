@@ -13,6 +13,8 @@ func TestModelIsAIWindow(t *testing.T) {
 			{Name: "agent", Tags: []string{"ai"}},
 			{Name: "shell"},
 			{Name: "logs", Tags: []string{"db"}},
+			{Name: "coder", Cmd: "claude"},
+			{Name: "build", Cmd: "make watch"},
 		},
 	}
 	m := Model{}
@@ -30,6 +32,9 @@ func TestModelIsAIWindow(t *testing.T) {
 		{"non-tagged with path-prefixed AI process", "logs", "/usr/local/bin/aider", true},
 		{"unknown window with AI process", "ghost", "codex", true},
 		{"unknown window with non-AI process", "ghost", "less", false},
+		{"untagged window with AI template cmd", "coder", "", true},
+		{"untagged window with AI template cmd, non-AI process", "coder", "node", true},
+		{"untagged window with non-AI template cmd", "build", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

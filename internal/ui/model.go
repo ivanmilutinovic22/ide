@@ -3,6 +3,7 @@ package ui
 import (
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -90,12 +91,12 @@ const focusPaneCount = 4
 type statusKind int
 
 const (
-	statusKindGeneric  statusKind = iota // default — show as-is
-	statusKindLoading                    // "Loading..." / "Refreshing..." — replace once data lands
-	statusKindEmpty                      // "No environments configured..." — replace once data lands
-	statusKindReady                      // hint shown once everything is loaded; suppress from status bar
-	statusKindFocus                      // "Focused [s] Sessions panel" — suppress; the panel border conveys focus
-	statusKindOverlay                    // "Shortcuts open." / "Theme picker open." — suppress; user can see the overlay
+	statusKindGeneric statusKind = iota // default — show as-is
+	statusKindLoading                   // "Loading..." / "Refreshing..." — replace once data lands
+	statusKindEmpty                     // "No environments configured..." — replace once data lands
+	statusKindReady                     // hint shown once everything is loaded; suppress from status bar
+	statusKindFocus                     // "Focused [s] Sessions panel" — suppress; the panel border conveys focus
+	statusKindOverlay                   // "Shortcuts open." / "Theme picker open." — suppress; user can see the overlay
 )
 
 // suppressible reports whether messages of this kind should be hidden from
@@ -245,6 +246,7 @@ type Model struct {
 	terminalMode          bool              // true = keys forwarded to embedded PTY
 	embeddedTerm          *EmbeddedTerminal // live PTY + VT emulator
 	leaderPending         bool              // true = previous key was tmux prefix (ctrl+b); next key may be a leader binding (e.g. q to exit)
+	rootSuggestionArmed   bool              // true = user tab-cycled to a path suggestion in the create form; enter accepts it
 }
 
 func newTextInput(prompt, placeholder string) textinput.Model {
@@ -268,6 +270,12 @@ func NewModel() Model {
 	m.createName = newTextInput("Name: ", "")
 	m.createRoot = newTextInput("Root: ", "")
 	m.createRoot.ShowSuggestions = true
+	// Tab cycles path suggestions and enter accepts the highlighted one
+	// (handled in updateCreateMode), replacing the textinput default of
+	// tab-accepts / up-down-cycles.
+	m.createRoot.KeyMap.AcceptSuggestion = key.NewBinding(key.WithDisabled())
+	m.createRoot.KeyMap.NextSuggestion = key.NewBinding(key.WithKeys("tab", "down", "ctrl+n"))
+	m.createRoot.KeyMap.PrevSuggestion = key.NewBinding(key.WithKeys("shift+tab", "up", "ctrl+p"))
 	m.createCustom = newTextInput("Windows: ", "")
 	m.templateName = newTextInput("Name: ", "")
 	m.templateSpec = newTextInput("Windows: ", "")

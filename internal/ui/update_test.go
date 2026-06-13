@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"ide/internal/config"
 )
 
@@ -198,6 +200,26 @@ func TestParseWindowEntry(t *testing.T) {
 	}
 }
 
+// TestFormatWindowSpecRoundTripPreservesTags is a regression test: editing an
+// environment or template pre-fills the form via formatWindowSpec, and saving
+// re-parses it. Tags used to be dropped in the serialize step, so one edit
+// (or edit + restart) silently lost every [ai] tag.
+func TestFormatWindowSpecRoundTripPreservesTags(t *testing.T) {
+	windows := []config.WindowTemplate{
+		{Name: "agent", Cmd: "claude", Tags: []string{"ai"}},
+		{Name: "logs", Cmd: "tail -f app.log", Cwd: "./api", Tags: []string{"ai", "db"}},
+		{Name: "shell"},
+	}
+	spec := formatWindowSpec(windows)
+	got, err := parseWindowSpec(spec)
+	if err != nil {
+		t.Fatalf("parseWindowSpec(%q) error: %v", spec, err)
+	}
+	if !reflect.DeepEqual(got, windows) {
+		t.Errorf("round trip mismatch:\nspec: %q\ngot:  %+v\nwant: %+v", spec, got, windows)
+	}
+}
+
 func TestParseWindowSpec(t *testing.T) {
 	t.Run("comma-separated entries", func(t *testing.T) {
 		got, err := parseWindowSpec("a, b=cmd, c|sh")
@@ -325,5 +347,101 @@ func TestUpdatePathSuggestionsOnlySuggestsDirectories(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected 'subdir' to be suggested, got %v", got)
+	}
+}
+
+// TestCreateRootTabCyclesEnterAccepts covers the root-field completion flow:
+// tab cycles through path suggestions, enter accepts the highlighted one and
+// stays on the field, and a second enter (nothing left to accept) advances
+// the form instead of drilling into subdirectory ghost text.
+func TestCreateRootTabCyclesEnterAccepts(t *testing.T) {
+	dir := t.TempDir()
+	for _, d := range []string{"alpha", "beta"} {
+		if err := os.Mkdir(filepath.Join(dir, d), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	m := NewModel()
+	m.createMode = true
+	m.createField = createFieldRoot
+	m.createRoot.Focus()
+	m.createRoot.SetValue(dir + "/")
+	m.updatePathSuggestions(&m.createRoot)
+
+	if got := m.createRoot.CurrentSuggestion(); filepath.Base(strings.TrimSuffix(got, "/")) != "alpha" {
+		t.Fatalf("expected first suggestion alpha, got %q", got)
+	}
+
+	// Tab cycles to the next suggestion (beta) without changing the value.
+	mm, _ := m.updateCreateMode(tea.KeyMsg{Type: tea.KeyTab})
+	m = mm.(Model)
+	if got := m.createRoot.CurrentSuggestion(); filepath.Base(strings.TrimSuffix(got, "/")) != "beta" {
+		t.Fatalf("expected tab to cycle suggestion to beta, got %q", got)
+	}
+	if m.createRoot.Value() != dir+"/" {
+		t.Fatalf("tab should not change the value, got %q", m.createRoot.Value())
+	}
+	if m.createField != createFieldRoot {
+		t.Fatalf("tab with suggestions should stay on root field")
+	}
+
+	// Enter accepts the highlighted suggestion and stays on the field.
+	mm, _ = m.updateCreateMode(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(Model)
+	if got := m.createRoot.Value(); got != filepath.Join(dir, "beta")+"/" {
+		t.Fatalf("enter should accept the cycled suggestion, got %q", got)
+	}
+	if m.createField != createFieldRoot {
+		t.Fatalf("accepting a suggestion should stay on root field")
+	}
+
+	// beta has no subdirectories, so a second enter advances the form.
+	mm, _ = m.updateCreateMode(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(Model)
+	if m.createField == createFieldRoot {
+		t.Fatalf("enter with nothing to accept should advance past root field")
+	}
+}
+
+// TestCreateRootEnterCompletesPartialComponent verifies that enter completes
+// a partially-typed path component even without tab-cycling first.
+func TestCreateRootEnterCompletesPartialComponent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "alpha"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	m := NewModel()
+	m.createMode = true
+	m.createField = createFieldRoot
+	m.createRoot.Focus()
+	m.createRoot.SetValue(filepath.Join(dir, "al"))
+	m.updatePathSuggestions(&m.createRoot)
+
+	mm, _ := m.updateCreateMode(tea.KeyMsg{Type: tea.KeyEnter})
+	m = mm.(Model)
+	if got := m.createRoot.Value(); got != filepath.Join(dir, "alpha")+"/" {
+		t.Fatalf("enter should complete partial component, got %q", got)
+	}
+	if m.createField != createFieldRoot {
+		t.Fatalf("completing a component should stay on root field")
+	}
+}
+
+// TestCreateRootTabAdvancesFieldWithoutSuggestions verifies that tab still
+// moves to the next field when there is nothing to cycle through.
+func TestCreateRootTabAdvancesFieldWithoutSuggestions(t *testing.T) {
+	m := NewModel()
+	m.createMode = true
+	m.createField = createFieldRoot
+	m.createRoot.Focus()
+	m.createRoot.SetValue("/nonexistent-path-zzz/")
+	m.updatePathSuggestions(&m.createRoot)
+
+	mm, _ := m.updateCreateMode(tea.KeyMsg{Type: tea.KeyTab})
+	m = mm.(Model)
+	if m.createField == createFieldRoot {
+		t.Fatalf("tab without suggestions should advance past root field")
 	}
 }
