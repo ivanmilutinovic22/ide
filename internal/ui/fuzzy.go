@@ -116,6 +116,11 @@ func (m Model) computeFuzzySearchResults() []fuzzySearchItem {
 	var results []fuzzySearchItem
 
 	for _, entry := range m.fuzzySearchCache {
+		// Only running sessions are listed; environments without a live
+		// tmux session are never surfaced in the search.
+		if !entry.header.Running {
+			continue
+		}
 		envMatches := query == "" || fuzzyMatch(query, entry.envHaystack)
 		var matchedWindows []fuzzySearchItem
 		for _, w := range entry.windows {

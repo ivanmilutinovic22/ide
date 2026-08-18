@@ -120,7 +120,7 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 		Name: "alpha",
 		Windows: []config.WindowTemplate{
 			{Name: "shell"},
-			{Name: "agent", Tags: []string{"ai"}},
+			{Name: "agent", Tags: []string{"gpt"}},
 		},
 	}
 	envB := config.Environment{
@@ -131,8 +131,11 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 	}
 
 	m := &Model{
-		environments:      []config.Environment{envA, envB},
-		sessions:          map[string]struct{}{},
+		environments: []config.Environment{envA, envB},
+		sessions: map[string]struct{}{
+			tmux.SessionName(envA.Name): {},
+			tmux.SessionName(envB.Name): {},
+		},
 		sessionWindows:    map[string][]string{},
 		windowProcessInfo: map[string]WindowProcessInfo{},
 		fuzzySearchQuery:  newTextInput("/ ", ""),
@@ -155,9 +158,9 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 	})
 
 	t.Run("query filters by tag text", func(t *testing.T) {
-		m.fuzzySearchQuery.SetValue("ai")
+		m.fuzzySearchQuery.SetValue("gpt")
 		results := m.computeFuzzySearchResults()
-		// Only envA's "agent" window has the [ai] tag, plus envA's header.
+		// Only envA's "agent" window has the [gpt] tag, plus envA's header.
 		var windows []fuzzySearchItem
 		for _, r := range results {
 			if !r.IsHeader {
@@ -182,15 +185,14 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 		}
 	})
 
-	t.Run("Running flag follows m.sessions in-place mutation", func(t *testing.T) {
-		// Initially no sessions are running.
+	t.Run("only running sessions are listed and Running flag follows m.sessions", func(t *testing.T) {
+		// With no live sessions, nothing is surfaced at all.
 		m.fuzzySearchQuery.SetValue("")
+		m.sessions = map[string]struct{}{}
 		m.rebuildFuzzyIndex()
 		results := m.computeFuzzySearchResults()
-		for _, r := range results {
-			if r.Running {
-				t.Errorf("expected no row to be Running before session start, got %+v", r)
-			}
+		if len(results) != 0 {
+			t.Errorf("expected no rows when no session is running, got %+v", results)
 		}
 
 		// Simulate terminalSessionReadyMsg: directly mark alpha's session as live
@@ -198,20 +200,23 @@ func TestRebuildFuzzyIndexAndCompute(t *testing.T) {
 		m.sessions[tmux.SessionName(envA.Name)] = struct{}{}
 		m.rebuildFuzzyIndex()
 		results = m.computeFuzzySearchResults()
-		var alphaRunning, betaRunning bool
+		var sawAlpha, sawBeta bool
 		for _, r := range results {
-			if r.EnvName == "alpha" && r.Running {
-				alphaRunning = true
+			if r.EnvName == "alpha" {
+				sawAlpha = true
+				if !r.Running {
+					t.Errorf("expected alpha rows to be Running, got %+v", r)
+				}
 			}
-			if r.EnvName == "beta" && r.Running {
-				betaRunning = true
+			if r.EnvName == "beta" {
+				sawBeta = true
 			}
 		}
-		if !alphaRunning {
-			t.Errorf("expected alpha rows to be Running after sessions mutation")
+		if !sawAlpha {
+			t.Errorf("expected alpha rows after marking its session running")
 		}
-		if betaRunning {
-			t.Errorf("expected beta rows NOT to be Running")
+		if sawBeta {
+			t.Errorf("expected beta (not running) to be excluded entirely")
 		}
 	})
 }
@@ -245,8 +250,11 @@ func TestFuzzySearchDoesNotSpanEnvWindowBoundary(t *testing.T) {
 	}
 
 	m := &Model{
-		environments:      []config.Environment{platform, updateView},
-		sessions:          map[string]struct{}{},
+		environments: []config.Environment{platform, updateView},
+		sessions: map[string]struct{}{
+			tmux.SessionName(platform.Name):   {},
+			tmux.SessionName(updateView.Name): {},
+		},
 		sessionWindows:    map[string][]string{},
 		windowProcessInfo: map[string]WindowProcessInfo{},
 		fuzzySearchQuery:  newTextInput("/ ", ""),
@@ -286,8 +294,10 @@ func TestFuzzySearchEnvNameMatchYieldsAllWindows(t *testing.T) {
 		},
 	}
 	m := &Model{
-		environments:      []config.Environment{env},
-		sessions:          map[string]struct{}{},
+		environments: []config.Environment{env},
+		sessions: map[string]struct{}{
+			tmux.SessionName(env.Name): {},
+		},
 		sessionWindows:    map[string][]string{},
 		windowProcessInfo: map[string]WindowProcessInfo{},
 		fuzzySearchQuery:  newTextInput("/ ", ""),
@@ -389,8 +399,10 @@ func TestOpenFuzzySearchCursorSkipsHeader(t *testing.T) {
 		Windows: []config.WindowTemplate{{Name: "shell"}},
 	}
 	m := &Model{
-		environments:      []config.Environment{env},
-		sessions:          map[string]struct{}{},
+		environments: []config.Environment{env},
+		sessions: map[string]struct{}{
+			tmux.SessionName(env.Name): {},
+		},
 		sessionWindows:    map[string][]string{},
 		windowProcessInfo: map[string]WindowProcessInfo{},
 		fuzzySearchQuery:  newTextInput("/ ", ""),

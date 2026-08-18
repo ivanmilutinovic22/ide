@@ -119,11 +119,10 @@ func TestSearchComputeResultsAppliesStatuses(t *testing.T) {
 	}
 }
 
-// TestSearchComputeResultsStatusIdleWhenSessionNotRunning verifies that even
-// if the statuses map contains a key, computeResults marks the row Idle when
-// the parent session is not running (defensive: stale status shouldn't bleed
-// into a closed session row).
-func TestSearchComputeResultsStatusIdleWhenSessionNotRunning(t *testing.T) {
+// TestSearchComputeResultsExcludesNonRunningSessions verifies that
+// environments without a live tmux session are omitted from the popup
+// entirely — only running sessions are listed.
+func TestSearchComputeResultsExcludesNonRunningSessions(t *testing.T) {
 	env := config.Environment{
 		Name: "proj",
 		Windows: []config.WindowTemplate{
@@ -144,13 +143,7 @@ func TestSearchComputeResultsStatusIdleWhenSessionNotRunning(t *testing.T) {
 	}
 
 	results := m.computeResults()
-	for _, r := range results {
-		if r.header {
-			continue
-		}
-		if r.status != AgentStatusIdle {
-			t.Errorf("window %q in non-running session: status = %q, want idle",
-				r.window, r.status)
-		}
+	if len(results) != 0 {
+		t.Errorf("non-running session should yield no rows, got %+v", results)
 	}
 }

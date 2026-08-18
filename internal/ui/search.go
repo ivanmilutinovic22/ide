@@ -250,6 +250,11 @@ func (m SearchModel) computeResults() []searchItem {
 	for envIdx, env := range m.envs {
 		session := tmux.SessionName(env.Name)
 		_, running := m.sessions[session]
+		// Only running sessions are listed; skip environments without a
+		// live tmux session entirely.
+		if !running {
+			continue
+		}
 
 		windows := tmux.WindowNames(env)
 		if sw, ok := m.sessionWindows[session]; ok && len(sw) > 0 {
