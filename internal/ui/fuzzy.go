@@ -45,10 +45,10 @@ func (m *Model) rebuildFuzzyIndex() {
 		_, running := m.sessions[session]
 		sessionStatus := m.getSessionAgentStatus(env)
 
+		// Only running sessions are surfaced, so the env haystack is just the
+		// name; a "running up" suffix would only inject stray letters into
+		// fuzzy matches.
 		envHaystack := strings.ToLower(env.Name)
-		if running {
-			envHaystack += " running up"
-		}
 
 		windows := m.windowNamesForEnv(env)
 		winEntries := make([]fuzzyWinCacheEntry, 0, len(windows))

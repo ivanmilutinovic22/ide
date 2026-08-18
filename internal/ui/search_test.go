@@ -66,6 +66,163 @@ func TestSearchComputeResultsTagsByName(t *testing.T) {
 	}
 }
 
+// TestSearchComputeResultsScopedToCurrentSession verifies that when
+// scopeSession is set, computeResults lists only that session's windows, but
+// keeps the session-header row (same style as the cross-session popup).
+func TestSearchComputeResultsScopedToCurrentSession(t *testing.T) {
+	envA := config.Environment{
+		Name:    "alpha",
+		Windows: []config.WindowTemplate{{Name: "editor"}, {Name: "logs"}},
+	}
+	envB := config.Environment{
+		Name:    "beta",
+		Windows: []config.WindowTemplate{{Name: "shell"}},
+	}
+	sessionA := tmux.SessionName(envA.Name)
+	sessionB := tmux.SessionName(envB.Name)
+
+	ti := textinput.New()
+	m := SearchModel{
+		query: ti,
+		envs:  []config.Environment{envA, envB},
+		sessions: map[string]struct{}{
+			sessionA: {},
+			sessionB: {},
+		},
+		sessionWindows: map[string][]string{},
+		scopeSession:   sessionA,
+	}
+
+	results := m.computeResults()
+
+	if len(results) == 0 || !results[0].header || results[0].env != envA.Name {
+		t.Fatalf("expected results to start with alpha's session header, got %+v", results)
+	}
+	for _, r := range results {
+		if r.env != envA.Name {
+			t.Errorf("scoped results must only include %q, got row from %q", envA.Name, r.env)
+		}
+	}
+
+	var windows []string
+	for _, r := range results {
+		if r.header {
+			continue
+		}
+		windows = append(windows, r.window)
+	}
+	if len(windows) != 2 || windows[0] != "editor" || windows[1] != "logs" {
+		t.Errorf("expected only alpha's windows [editor logs], got %v", windows)
+	}
+}
+
+// TestSearchComputeResultsAliasFirst verifies that windows whose alias (tag)
+// matches the query are ranked above windows that match only on name.
+func TestSearchComputeResultsAliasFirst(t *testing.T) {
+	env := config.Environment{
+		Name: "proj",
+		Windows: []config.WindowTemplate{
+			// "server" matches query "sv" on the NAME (s..v..), no tag.
+			{Name: "server"},
+			// "editor" matches query "sv" only via its [sv] alias.
+			{Name: "editor", Tags: []string{"sv"}},
+		},
+	}
+	session := tmux.SessionName(env.Name)
+
+	ti := textinput.New()
+	ti.SetValue("sv")
+	m := SearchModel{
+		query:          ti,
+		envs:           []config.Environment{env},
+		sessions:       map[string]struct{}{session: {}},
+		sessionWindows: map[string][]string{},
+	}
+
+	results := m.computeResults()
+
+	var windows []string
+	for _, r := range results {
+		if !r.header {
+			windows = append(windows, r.window)
+		}
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected both windows to match %q, got %v", "sv", windows)
+	}
+	if windows[0] != "editor" {
+		t.Errorf("alias match should rank first: got %v, want editor before server", windows)
+	}
+}
+
+// TestSearchComputeResultsNoCrossBoundaryMatch reproduces the reported bug
+// where query "lg" matched every window in session "te-liveevents": the old
+// combined haystack ("<env> <window> [tags] running up") let the query pull
+// "l" from the env name and "g" from the "running" status text. Now env-name
+// and window matching are separate and "running up" is dropped, so "lg" must
+// match only the window whose name/alias contains it.
+func TestSearchComputeResultsNoCrossBoundaryMatch(t *testing.T) {
+	env := config.Environment{
+		Name: "te-liveevents",
+		Windows: []config.WindowTemplate{
+			{Name: "lazygit", Tags: []string{"lg"}},
+			{Name: "editor", Tags: []string{"ed"}},
+			{Name: "terminal", Tags: []string{"tm"}},
+			{Name: "henv", Tags: []string{"he"}},
+			{Name: "database", Tags: []string{"db"}},
+			{Name: "agent", Tags: []string{"ai"}},
+		},
+	}
+	session := tmux.SessionName(env.Name)
+
+	ti := textinput.New()
+	ti.SetValue("lg")
+	m := SearchModel{
+		query:          ti,
+		envs:           []config.Environment{env},
+		sessions:       map[string]struct{}{session: {}},
+		sessionWindows: map[string][]string{},
+		scopeSession:   session,
+	}
+
+	var windows []string
+	for _, r := range m.computeResults() {
+		if !r.header {
+			windows = append(windows, r.window)
+		}
+	}
+	if len(windows) != 1 || windows[0] != "lazygit" {
+		t.Errorf("query %q should match only lazygit, got %v", "lg", windows)
+	}
+}
+
+// TestSearchMoveCursorNeverLandsOnHeader verifies that moving the cursor up
+// from the first window does not park it on the session header (which would
+// drop the highlight and make Enter a no-op). It should stay on the first
+// window instead.
+func TestSearchMoveCursorNeverLandsOnHeader(t *testing.T) {
+	results := []searchItem{
+		{header: true, env: "proj"},
+		{window: "a"},
+		{window: "b"},
+	}
+	m := &SearchModel{results: results, cursor: 1} // on first window
+
+	m.moveCursor(-1) // press up
+	if m.results[m.cursor].header {
+		t.Errorf("cursor landed on header after up from first window (cursor=%d)", m.cursor)
+	}
+	if m.cursor != 1 {
+		t.Errorf("cursor should stay on first window, got %d", m.cursor)
+	}
+
+	m.cursor = 2 // last window
+	m.moveCursor(1)
+	if m.cursor != 2 {
+		t.Errorf("cursor should stay on last window when moving past end, got %d", m.cursor)
+	}
+}
+
 // TestSearchComputeResultsAppliesStatuses verifies that computeResults wires
 // per-window agent statuses (cooking / awaiting) onto matching searchItem rows
 // when the parent session is running and the window key is present in

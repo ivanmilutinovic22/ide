@@ -38,6 +38,10 @@ type SearchModel struct {
 	sessionWindows map[string][]string
 	statuses       map[string]AgentStatus
 	theme          uiTheme
+	// scopeSession, when non-empty, restricts results to the windows of a
+	// single tmux session (e.g. the one the popup was launched from) and
+	// suppresses the session header. Empty means "all running sessions".
+	scopeSession string
 }
 
 type searchSessionsLoadedMsg struct {
@@ -67,6 +71,19 @@ func NewSearchModel() SearchModel {
 		sessionWindows: map[string][]string{},
 		statuses:       map[string]AgentStatus{},
 		theme:          themes[0],
+	}
+	return m
+}
+
+// NewSessionWindowsModel builds a popup scoped to the windows of the tmux
+// session it is launched from (used by the tmux prefix+w keybinding). It
+// reuses SearchModel; only the scope and prompt copy differ. If the current
+// session cannot be determined it falls back to the full cross-session list.
+func NewSessionWindowsModel() SearchModel {
+	m := NewSearchModel()
+	m.scopeSession = currentTmuxSession()
+	if m.scopeSession != "" {
+		m.query.Placeholder = "Search windows in this session..."
 	}
 	return m
 }
@@ -255,13 +272,25 @@ func (m SearchModel) computeResults() []searchItem {
 		if !running {
 			continue
 		}
+		// When scoped to a single session, skip every other one.
+		if m.scopeSession != "" && session != m.scopeSession {
+			continue
+		}
 
 		windows := tmux.WindowNames(env)
 		if sw, ok := m.sessionWindows[session]; ok && len(sw) > 0 {
 			windows = sw
 		}
 
-		var matched []searchItem
+		// Env-name matching is kept separate from window matching so a query
+		// can't fuzzy-match across the env/window boundary (e.g. "lg" grabbing
+		// "l" from the env name and "g" from a window). A query matching the
+		// env name includes all of its windows.
+		envMatch := query != "" && fuzzyMatch(query, strings.ToLower(env.Name))
+
+		// Alias-first ranking: windows whose alias (tag) matches the query are
+		// listed before windows that only match on name/other text.
+		var aliasMatched, otherMatched []searchItem
 		for winIdx, wName := range windows {
 			var tags []string
 			if tmpl, ok := findWindowTemplate(env, wName); ok {
@@ -269,33 +298,42 @@ func (m SearchModel) computeResults() []searchItem {
 			}
 
 			tagStr := ""
+			aliasHaystack := ""
 			for _, t := range tags {
 				tagStr += " [" + t + "]"
+				aliasHaystack += " " + strings.ToLower(t)
 			}
-			searchStr := strings.ToLower(env.Name + " " + wName + tagStr)
-			if running {
-				searchStr += " running up"
-			}
+			// Per-window haystack is window name + tags only. "running up" is
+			// intentionally omitted: only running sessions are ever listed, so
+			// it would just inject stray letters into fuzzy matches.
+			winHaystack := strings.ToLower(wName + tagStr)
 
-			if query == "" || fuzzyMatch(query, searchStr) {
-				status := AgentStatusIdle
-				if running && m.statuses != nil {
-					if s, ok := m.statuses[windowKey(session, wName)]; ok {
-						status = s
-					}
+			if query != "" && !envMatch && !fuzzyMatch(query, winHaystack) {
+				continue
+			}
+			status := AgentStatusIdle
+			if running && m.statuses != nil {
+				if s, ok := m.statuses[windowKey(session, wName)]; ok {
+					status = s
 				}
-				matched = append(matched, searchItem{
-					envIdx:  envIdx,
-					winIdx:  winIdx,
-					env:     env.Name,
-					window:  wName,
-					tags:    tags,
-					running: running,
-					status:  status,
-				})
+			}
+			item := searchItem{
+				envIdx:  envIdx,
+				winIdx:  winIdx,
+				env:     env.Name,
+				window:  wName,
+				tags:    tags,
+				running: running,
+				status:  status,
+			}
+			if query != "" && fuzzyMatch(query, strings.TrimSpace(aliasHaystack)) {
+				aliasMatched = append(aliasMatched, item)
+			} else {
+				otherMatched = append(otherMatched, item)
 			}
 		}
 
+		matched := append(aliasMatched, otherMatched...)
 		if len(matched) > 0 {
 			results = append(results, searchItem{
 				envIdx:  envIdx,
@@ -341,22 +379,17 @@ func (m *SearchModel) moveCursor(dir int) {
 	if n == 0 {
 		return
 	}
-	m.cursor += dir
-	if m.cursor < 0 {
-		m.cursor = 0
+	// Walk in the requested direction to the next selectable (non-header)
+	// row. If there is none that way, stay put rather than clamping onto a
+	// header row (which would drop the highlight and make Enter a no-op).
+	i := m.cursor + dir
+	for i >= 0 && i < n && m.results[i].header {
+		i += dir
 	}
-	if m.cursor >= n {
-		m.cursor = n - 1
+	if i < 0 || i >= n {
+		return
 	}
-	for m.cursor >= 0 && m.cursor < n && m.results[m.cursor].header {
-		m.cursor += dir
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
-	}
-	if m.cursor >= n {
-		m.cursor = n - 1
-	}
+	m.cursor = i
 }
 
 func (m SearchModel) View() string {
