@@ -22,6 +22,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.syncModalInputWidths()
 		if m.terminalMode && m.embeddedTerm != nil {
 			_, rightWidth := splitPaneWidths(m.width - 1)
 			m.embeddedTerm.Resize(paneContentWidth(rightWidth), layout.TerminalPreviewHeight(m.height))
@@ -614,6 +615,7 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "c":
 		m.createMode = true
 		m.templateMode = false
+		m.syncModalInputWidths()
 		m.createField = createFieldName
 		m.createName.SetValue("")
 		m.createRoot.SetValue("")
@@ -769,6 +771,7 @@ func (m Model) currentTemplate() (config.Template, bool) {
 func (m Model) openCreateTemplateMode() (Model, tea.Cmd) {
 	m.templateMode = true
 	m.createMode = false
+	m.syncModalInputWidths()
 	m.templateField = templateFieldName
 	m.templateName.SetValue("")
 	m.templateSpec.SetValue("")
@@ -787,9 +790,11 @@ func (m Model) startEditTemplateMode() (tea.Model, tea.Cmd) {
 	}
 	m.templateMode = true
 	m.createMode = false
+	m.syncModalInputWidths()
 	m.templateField = templateFieldName
 	m.templateName.SetValue(tpl.Name)
 	m.templateSpec.SetValue(formatWindowSpec(tpl.Windows))
+	m.templateSpec.CursorEnd()
 	m.templateEditing = true
 	m.templateOrigin = tpl.Name
 	m.focusTemplateField()
@@ -869,11 +874,13 @@ func (m Model) openEnvEditMode() (tea.Model, tea.Cmd) {
 	m.createMode = false
 	m.templateMode = false
 	m.extractMode = false
+	m.syncModalInputWidths()
 	m.envEditTarget = env.Name
 	m.envEditSpec.SetValue(formatWindowSpec(env.Windows))
+	m.envEditSpec.CursorEnd()
 	m.envEditTemplate = -1
 	m.envEditSpec.Focus()
-	m.status = "Edit environment template — Enter saves, ctrl+t loads a template, Esc cancels."
+	m.status = "Edit environment template — Enter saves, ctrl+l loads a template, Esc cancels."
 	return m, textinput.Blink
 }
 
@@ -891,8 +898,10 @@ func (m Model) openExtractTemplateMode() (tea.Model, tea.Cmd) {
 	m.createMode = false
 	m.templateMode = false
 	m.envEditMode = false
+	m.syncModalInputWidths()
 	m.extractTarget = env.Name
 	m.extractName.SetValue(env.Name)
+	m.extractName.CursorEnd()
 	m.extractName.Focus()
 	m.status = "Save windows as template — name it, Enter to save, Esc cancels."
 	return m, textinput.Blink
@@ -909,7 +918,7 @@ func (m Model) updateEnvEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.envEditSpec.Blur()
 		m.status = "Edit canceled."
 		return m, nil
-	case "ctrl+t":
+	case "ctrl+l":
 		m.cycleEnvEditTemplate()
 		return m, nil
 	case "enter":
@@ -942,7 +951,7 @@ func (m *Model) cycleEnvEditTemplate() {
 	tpl := m.templates[m.envEditTemplate]
 	m.envEditSpec.SetValue(formatWindowSpec(tpl.Windows))
 	m.envEditSpec.CursorEnd()
-	m.status = fmt.Sprintf("Loaded template %q (ctrl+t for next, Enter saves).", tpl.Name)
+	m.status = fmt.Sprintf("Loaded template %q (ctrl+l for next, Enter saves).", tpl.Name)
 }
 
 func (m Model) updateExtractMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -212,7 +212,7 @@ type Model struct {
 	envEditMode           bool
 	envEditTarget         string
 	envEditSpec           textinput.Model
-	envEditTemplate       int // -1 = none applied; else index into m.templates last loaded via ctrl+t
+	envEditTemplate       int // -1 = none applied; else index into m.templates last loaded via ctrl+l
 	extractMode           bool
 	extractTarget         string
 	extractName           textinput.Model

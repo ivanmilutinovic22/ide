@@ -195,6 +195,42 @@ func modalContentWidth(width int) int {
 	return contentWidth
 }
 
+// modalInputWidth computes the usable width for a modal textinput field,
+// mirroring the layout math in View(). The result must be assigned to the
+// persisted textinput's Width so bubbles' handleOverflow scrolls the value
+// horizontally as the cursor moves (a Width set only on a View-time copy is
+// lost, leaving offset==0 and clipping long specs on the right).
+func (m Model) modalInputWidth(prompt string) int {
+	if m.width == 0 || m.height == 0 {
+		return 0
+	}
+	leftWidth, rightWidth := splitPaneWidths(m.width - 1)
+	bodyWidth := leftWidth + 1 + rightWidth // +1 for the horizontal gap
+	bodyHeight := m.height - 2
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	popupWidth, _ := modalPopupDimensions(bodyWidth, bodyHeight, rightWidth, bodyHeight)
+	w := modalContentWidth(popupWidth) - lipgloss.Width(prompt) - 1 // -1 for cursor space
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// syncModalInputWidths keeps the persisted widths of every modal textinput in
+// step with the current terminal size, so horizontal scrolling works from the
+// first keystroke and after any resize.
+func (m *Model) syncModalInputWidths() {
+	m.createName.Width = m.modalInputWidth(m.createName.Prompt)
+	m.createRoot.Width = m.modalInputWidth(m.createRoot.Prompt)
+	m.createCustom.Width = m.modalInputWidth(m.createCustom.Prompt)
+	m.templateName.Width = m.modalInputWidth(m.templateName.Prompt)
+	m.templateSpec.Width = m.modalInputWidth(m.templateSpec.Prompt)
+	m.envEditSpec.Width = m.modalInputWidth(m.envEditSpec.Prompt)
+	m.extractName.Width = m.modalInputWidth(m.extractName.Prompt)
+}
+
 func padLineToWidth(line string, width int) string {
 	if width <= 0 {
 		return line
@@ -959,17 +995,9 @@ func (m Model) renderPreviewRows(session, windowName string, usingLiveWindows bo
 func (m Model) renderCreatePane(width, height int) string {
 	rows := make([]string, 0, 20)
 	contentWidth := modalContentWidth(width)
-
-	inputW := func(prompt string) int {
-		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
-		if w < 1 {
-			w = 1
-		}
-		return w
-	}
-	m.createName.Width = inputW(m.createName.Prompt)
-	m.createRoot.Width = inputW(m.createRoot.Prompt)
-	m.createCustom.Width = inputW(m.createCustom.Prompt)
+	// Field widths are set on the persisted inputs by syncModalInputWidths
+	// (needed so bubbles scrolls horizontally during Update); the View copy
+	// inherits them, so we don't recompute Width here.
 
 	templateName := m.selectedCreateTemplateName()
 	templateLine := "Template: " + templateName
@@ -995,17 +1023,7 @@ func (m Model) renderCreatePane(width, height int) string {
 
 func (m Model) renderTemplatePane(width, height int) string {
 	rows := make([]string, 0, 14)
-	contentWidth := modalContentWidth(width)
-
-	inputW := func(prompt string) int {
-		w := contentWidth - lipgloss.Width(prompt) - 1 // -1 for cursor space in View()
-		if w < 1 {
-			w = 1
-		}
-		return w
-	}
-	m.templateName.Width = inputW(m.templateName.Prompt)
-	m.templateSpec.Width = inputW(m.templateSpec.Prompt)
+	// Field widths are set on the persisted inputs by syncModalInputWidths.
 
 	rows = append(rows, m.templateName.View())
 	rows = append(rows, m.templateSpec.View())
@@ -1022,16 +1040,10 @@ func (m Model) renderTemplatePane(width, height int) string {
 }
 
 func (m Model) renderEnvEditPane(width, height int) string {
-	contentWidth := modalContentWidth(width)
-	inputW := contentWidth - lipgloss.Width(m.envEditSpec.Prompt) - 1
-	if inputW < 1 {
-		inputW = 1
-	}
-	m.envEditSpec.Width = inputW
-
-	templateHint := "ctrl+t: load a template into the spec"
+	// envEditSpec width is set on the persisted input by syncModalInputWidths.
+	templateHint := "ctrl+l: load a template into the spec"
 	if m.envEditTemplate >= 0 && m.envEditTemplate < len(m.templates) {
-		templateHint = "Loaded template: " + m.templates[m.envEditTemplate].Name + " (ctrl+t for next)"
+		templateHint = "Loaded template: " + m.templates[m.envEditTemplate].Name + " (ctrl+l for next)"
 	}
 
 	rows := []string{
@@ -1047,13 +1059,7 @@ func (m Model) renderEnvEditPane(width, height int) string {
 }
 
 func (m Model) renderExtractPane(width, height int) string {
-	contentWidth := modalContentWidth(width)
-	inputW := contentWidth - lipgloss.Width(m.extractName.Prompt) - 1
-	if inputW < 1 {
-		inputW = 1
-	}
-	m.extractName.Width = inputW
-
+	// extractName width is set on the persisted input by syncModalInputWidths.
 	rows := []string{
 		"Save windows from: " + m.extractTarget,
 		m.extractName.View(),
