@@ -18,7 +18,8 @@ const usage = `ide — terminal UI for managing tmux-based dev environments
 
 Usage:
   ide              Launch the main TUI
-  ide --search     Open the fuzzy-search popup (used by tmux prefix+a)
+  ide --search     Open the fuzzy-search popup (used by tmux prefix+s)
+  ide --windows    Open the current-session window switcher (used by tmux prefix+w)
   ide --help       Show this message
   ide --version    Print the version
 
@@ -48,6 +49,8 @@ func Dispatch() int {
 			return 0
 		case "--search":
 			mode = "search"
+		case "--windows":
+			mode = "windows"
 		default:
 			fmt.Fprintf(os.Stderr, "ide: unknown argument %q\n\n%s", a, usage)
 			return 2
@@ -56,6 +59,9 @@ func Dispatch() int {
 
 	if mode == "search" {
 		return run.Search()
+	}
+	if mode == "windows" {
+		return run.Windows()
 	}
 	return run.Main()
 }
