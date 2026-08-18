@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -16,33 +15,6 @@ import (
 	"ide/internal/config"
 	"ide/internal/tmux"
 )
-
-// searchKeyBoundOnce gates the prefix+a tmux keybinding to a single
-// installation per process. The old code spawned a fresh goroutine for
-// it on every 500ms sessionsLoadedMsg tick, leaking goroutines (one per
-// tick) and burning a subprocess + an os.Executable() call each time.
-var searchKeyBoundOnce sync.Once
-
-// bindSearchKeyOnceCmd ensures the tmux popup binding is installed exactly
-// once per process. Subsequent calls are cheap no-ops.
-func bindSearchKeyOnceCmd() tea.Cmd {
-	return func() tea.Msg {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("bindSearchKey panic recovered: %v", r)
-			}
-		}()
-		searchKeyBoundOnce.Do(func() {
-			exe, err := os.Executable()
-			if err != nil {
-				log.Printf("bindSearchKey: os.Executable: %v", err)
-				return
-			}
-			tmux.BindSearchKey(exe)
-		})
-		return nil
-	}
-}
 
 type configLoadedMsg struct {
 	envs      []config.Environment

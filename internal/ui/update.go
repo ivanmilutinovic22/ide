@@ -277,10 +277,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildFuzzyIndex()
 		m.normalizeSelection()
-		// bindSearchKeyOnceCmd is a sync.Once-guarded no-op after the first call.
-		// We batch it onto the normal capture command so we don't spawn an
-		// extra goroutine per tick.
-		return m, tea.Batch(m.captureCurrentWindowCmd(), bindSearchKeyOnceCmd())
+		return m, m.captureCurrentWindowCmd()
 
 	case panePreviewMsg:
 		m.previewContent = msg.content

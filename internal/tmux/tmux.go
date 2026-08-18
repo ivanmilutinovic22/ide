@@ -224,27 +224,12 @@ func EnsureSession(env config.Environment) error {
 		log.Printf("EnsureSession: window %q created", name)
 	}
 
-	// Bind prefix+a to open the search popup
-	if exe, err := os.Executable(); err == nil {
-		BindSearchKey(exe)
-	}
+	// The search popup (ide --search) and current-session window switcher
+	// (ide --windows) are both wired up via the user's tmux config rather than
+	// runtime bindings, so nothing is bound here.
 
 	log.Printf("EnsureSession: done, session %q has %d windows", session, len(env.Windows))
 	return nil
-}
-
-// BindSearchKey sets up a tmux keybinding (prefix + a) that opens the IDE
-// search popup directly inside the tmux session using display-popup. A
-// failure here is non-fatal — the rest of the session still works without
-// the popup binding — but log it so users have a breadcrumb.
-func BindSearchKey(ideBinary string) {
-	cmd := exec.Command("tmux", "bind-key", "-T", "prefix", "a",
-		"display-popup", "-E", "-w", "80%", "-h", "80%", ideBinary, "--search")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		log.Printf("BindSearchKey: failed to bind prefix+a: %v: %s", err, strings.TrimSpace(stderr.String()))
-	}
 }
 
 // SwapWindow swaps two windows live in the running tmux session.
