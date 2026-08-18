@@ -871,8 +871,9 @@ func (m Model) openEnvEditMode() (tea.Model, tea.Cmd) {
 	m.extractMode = false
 	m.envEditTarget = env.Name
 	m.envEditSpec.SetValue(formatWindowSpec(env.Windows))
+	m.envEditTemplate = -1
 	m.envEditSpec.Focus()
-	m.status = "Edit environment template — Enter saves, Esc cancels."
+	m.status = "Edit environment template — Enter saves, ctrl+t loads a template, Esc cancels."
 	return m, textinput.Blink
 }
 
@@ -908,6 +909,9 @@ func (m Model) updateEnvEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.envEditSpec.Blur()
 		m.status = "Edit canceled."
 		return m, nil
+	case "ctrl+t":
+		m.cycleEnvEditTemplate()
+		return m, nil
 	case "enter":
 		windows, err := parseWindowSpec(m.envEditSpec.Value())
 		if err != nil {
@@ -921,6 +925,24 @@ func (m Model) updateEnvEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.envEditSpec, cmd = m.envEditSpec.Update(msg)
 	return m, cmd
+}
+
+// cycleEnvEditTemplate advances to the next saved template and loads its
+// window spec into the edit input, letting the user overwrite an existing
+// environment's windows with a template from the template list.
+func (m *Model) cycleEnvEditTemplate() {
+	if len(m.templates) == 0 {
+		m.status = "No templates saved to apply."
+		return
+	}
+	m.envEditTemplate++
+	if m.envEditTemplate < 0 || m.envEditTemplate >= len(m.templates) {
+		m.envEditTemplate = 0
+	}
+	tpl := m.templates[m.envEditTemplate]
+	m.envEditSpec.SetValue(formatWindowSpec(tpl.Windows))
+	m.envEditSpec.CursorEnd()
+	m.status = fmt.Sprintf("Loaded template %q (ctrl+t for next, Enter saves).", tpl.Name)
 }
 
 func (m Model) updateExtractMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

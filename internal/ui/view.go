@@ -1029,11 +1029,17 @@ func (m Model) renderEnvEditPane(width, height int) string {
 	}
 	m.envEditSpec.Width = inputW
 
+	templateHint := "ctrl+t: load a template into the spec"
+	if m.envEditTemplate >= 0 && m.envEditTemplate < len(m.templates) {
+		templateHint = "Loaded template: " + m.templates[m.envEditTemplate].Name + " (ctrl+t for next)"
+	}
+
 	rows := []string{
 		"Environment: " + m.envEditTarget,
 		m.envEditSpec.View(),
 		"",
 		"Window spec format: name=cmd;name2;name3=cmd|cwd",
+		templateHint,
 		"Enter saves; press r afterwards to restart the session",
 		"Esc cancels",
 	}
