@@ -576,6 +576,13 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 	title := panelTitle("s", "Sessions", focused, theme)
 	contentWidth := paneContentWidth(width)
 
+	names := make([]string, len(m.environments))
+	for i, env := range m.environments {
+		names[i] = env.Name
+	}
+	// " [down] ◆" is the widest suffix; the name column shrinks to keep it on-screen.
+	nameCol := listColumnWidth(names, contentWidth-listRowIndent-len(" [down] ◆"))
+
 	rows := make([]string, 0, len(m.environments))
 	for idx, env := range m.environments {
 		sessionName := tmux.SessionName(env.Name)
@@ -597,7 +604,7 @@ func (m Model) renderEnvironmentPane(width, height int) string {
 			indicator = " ◆"
 		}
 
-		content := fmt.Sprintf("%s %-20s [%s]%s", numPrefix(idx), env.Name, state, indicator)
+		content := fmt.Sprintf("%s [%s]%s", padColumn(env.Name, nameCol), state, indicator)
 		selected := idx == m.selectedEnv
 		selectedStyle := selectedLineStyle
 		var defaultStyle *lipgloss.Style
@@ -633,9 +640,15 @@ func (m Model) renderTemplatesPane(width, height int) string {
 	title := panelTitle("t", "Templates", focused, m.currentTheme())
 	contentWidth := paneContentWidth(width)
 
+	names := make([]string, len(m.templates))
+	for i, tpl := range m.templates {
+		names[i] = tpl.Name
+	}
+	nameCol := listColumnWidth(names, contentWidth-listRowIndent-len(" (99 windows)"))
+
 	rows := make([]string, 0, len(m.templates))
 	for idx, tpl := range m.templates {
-		content := fmt.Sprintf("%s %-15s (%d windows)", numPrefix(idx), tpl.Name, len(tpl.Windows))
+		content := fmt.Sprintf("%s (%d windows)", padColumn(tpl.Name, nameCol), len(tpl.Windows))
 		rows = append(rows, renderListRow(content, idx == m.selectedTemplate, contentWidth, m.currentTheme(), selectedLineStyle, nil))
 	}
 
