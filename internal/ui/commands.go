@@ -101,6 +101,29 @@ type panePreviewMsg struct {
 
 type previewTickMsg struct{}
 
+// configStamp identifies a version of the config file on disk; the preview
+// tick compares it to hot-reload edits made outside this TUI (e.g. via CLI).
+type configStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+type configStampMsg struct{ stamp configStamp }
+
+func statConfigCmd() tea.Cmd {
+	return func() tea.Msg {
+		path, err := config.ConfigFilePath()
+		if err != nil {
+			return nil
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			return nil
+		}
+		return configStampMsg{stamp: configStamp{modTime: fi.ModTime(), size: fi.Size()}}
+	}
+}
+
 // agentStatusUpdateMsg carries process info updates for agent status detection
 type agentStatusUpdateMsg struct {
 	session  string

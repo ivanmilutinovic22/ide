@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -443,5 +444,39 @@ func TestCreateRootTabAdvancesFieldWithoutSuggestions(t *testing.T) {
 	m = mm.(Model)
 	if m.createField == createFieldRoot {
 		t.Fatalf("tab without suggestions should advance past root field")
+	}
+}
+
+func TestHandleIndexDigitMultiDigitJump(t *testing.T) {
+	m := NewModel()
+	m.focusPane = focusPaneEnvironments
+	for i := 0; i < 20; i++ {
+		m.environments = append(m.environments, config.Environment{Name: fmt.Sprintf("env%02d", i)})
+	}
+	step := func(key byte) {
+		next, _ := m.handleIndexDigit(key)
+		m = next.(Model)
+	}
+
+	step('1')
+	if m.selectedEnv != 0 {
+		t.Fatalf("after '1' selectedEnv = %d, want 0", m.selectedEnv)
+	}
+	step('5')
+	if m.selectedEnv != 14 {
+		t.Fatalf("after '1','5' selectedEnv = %d, want 14", m.selectedEnv)
+	}
+	// "153" is out of range, so '3' starts a fresh number.
+	step('3')
+	if m.selectedEnv != 2 {
+		t.Fatalf("after overflow '3' selectedEnv = %d, want 2", m.selectedEnv)
+	}
+
+	// Expired buffer: next digit is a fresh number.
+	next, _ := m.Update(digitResetMsg{seq: m.digitSeq})
+	m = next.(Model)
+	step('2')
+	if m.selectedEnv != 1 {
+		t.Fatalf("after reset '2' selectedEnv = %d, want 1", m.selectedEnv)
 	}
 }

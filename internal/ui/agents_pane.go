@@ -61,6 +61,13 @@ func (m Model) renderAgentsPane(width, height int) string {
 	contentWidth := paneContentWidth(width)
 
 	items := m.agentItems()
+	names := make([]string, len(items))
+	for i, it := range items {
+		names[i] = it.envName
+	}
+	// Leave room for at least " / " plus a short window name and the indicator.
+	nameCol := listColumnWidth(names, contentWidth-listRowIndent-len(" / claude ◆"))
+
 	rows := make([]string, 0, len(items))
 	for idx, it := range items {
 		indicator := ""
@@ -70,7 +77,7 @@ func (m Model) renderAgentsPane(width, height int) string {
 		case AgentStatusAwaitingInput:
 			indicator = " ◆"
 		}
-		content := fmt.Sprintf("%s %s / %s%s", numPrefix(idx), it.envName, it.windowName, indicator)
+		content := fmt.Sprintf("%s / %s%s", padColumn(it.envName, nameCol), it.windowName, indicator)
 
 		selected := idx == m.selectedAgent
 		selectedStyle := selectedLineStyle

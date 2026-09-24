@@ -248,6 +248,10 @@ type Model struct {
 	embeddedTerm          *EmbeddedTerminal // live PTY + VT emulator
 	leaderPending         bool              // true = previous key was tmux prefix (ctrl+b); next key may be a leader binding (e.g. q to exit)
 	rootSuggestionArmed   bool              // true = user tab-cycled to a path suggestion in the create form; enter accepts it
+	digitBuf              string            // digits typed so far for a multi-digit index jump ("1" then "5" → row 15)
+	digitPane             int               // pane digitBuf was typed in; switching panes starts a fresh number
+	digitSeq              int               // bumps on every digit so stale digitResetMsg ticks are ignored
+	configStamp           configStamp       // last seen config file mtime/size; a change triggers hot reload
 }
 
 func newTextInput(prompt, placeholder string) textinput.Model {
