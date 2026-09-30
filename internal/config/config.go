@@ -220,6 +220,7 @@ func saveAllLocked(data Data) error {
 
 	for i := range data.Environments {
 		normalizeEnvironment(&data.Environments[i])
+		data.Environments[i].Root = absolutePath(data.Environments[i].Root)
 	}
 	for i := range data.Templates {
 		normalizeTemplate(&data.Templates[i])
@@ -352,6 +353,21 @@ func normalizePath(value string) string {
 		return value
 	}
 	return filepath.Clean(value)
+}
+
+// absolutePath resolves a relative root against the current working directory
+// at save time. tmux resolves a relative -c against its server's cwd (not
+// ours) and silently falls back to $HOME when that fails, so roots must be
+// stored absolute.
+func absolutePath(value string) string {
+	if value == "" || filepath.IsAbs(value) {
+		return value
+	}
+	abs, err := filepath.Abs(value)
+	if err != nil {
+		return value
+	}
+	return abs
 }
 
 func legacyDefaultWindows() []WindowTemplate {

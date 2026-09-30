@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,28 +125,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = focusedPaneStatus(pane)
 			return m, m.captureCurrentWindowCmd()
 		}
-		if idx, ok := parseIndexShortcut(key); ok {
-			switch m.focusPane {
-			case focusPaneEnvironments:
-				if idx < len(m.environments) {
-					m.selectedEnv = idx
-					return m, m.captureCurrentWindowCmd()
-				}
-			case focusPaneAgents:
-				if items := m.agentItems(); idx < len(items) {
-					m.selectedAgent = idx
-				}
-			case focusPaneTemplates:
-				if idx < len(m.templates) {
-					m.selectedTemplate = idx
-				}
-			case focusPaneWindows:
-				if windows := m.currentWindowNames(); idx < len(windows) {
-					m.selectedWindow = idx
-					return m, m.captureCurrentWindowCmd()
-				}
-			}
-			return m, nil
+		if d, ok := parseDigit(key); ok {
+			return m.handleIndexDigit(d)
 		}
 		switch key {
 		case "q", "ctrl+c":
@@ -338,8 +319,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model, enterCmd := m.enterTerminalMode()
 		return model, tea.Batch(enterCmd, loadSessionsCmd())
 
+	case digitResetMsg:
+		if msg.seq == m.digitSeq {
+			m.digitBuf = ""
+		}
+		return m, nil
+
+	case configStampMsg:
+		if msg.stamp == m.configStamp || m.modalOpen() {
+			// Unchanged, or a form is open over config state — retry next tick.
+			return m, nil
+		}
+		first := m.configStamp == (configStamp{})
+		m.configStamp = msg.stamp
+		if first {
+			return m, nil
+		}
+		// Keep the cursor on the same env/template across the reload.
+		if m.selectedEnv >= 0 && m.selectedEnv < len(m.environments) && m.pendingSelect == "" {
+			m.pendingSelect = m.environments[m.selectedEnv].Name
+		}
+		if m.selectedTemplate >= 0 && m.selectedTemplate < len(m.templates) && m.pendingTemplateSelect == "" {
+			m.pendingTemplateSelect = m.templates[m.selectedTemplate].Name
+		}
+		return m, loadConfigCmd()
+
 	case previewTickMsg:
-		return m, tea.Batch(m.captureCurrentWindowCmd(), loadSessionsCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
+		return m, tea.Batch(m.captureCurrentWindowCmd(), loadSessionsCmd(), statConfigCmd(), tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 			return previewTickMsg{}
 		}))
 
@@ -579,11 +585,69 @@ func parsePaneShortcut(key string) (int, bool) {
 	}
 }
 
-func parseIndexShortcut(key string) (int, bool) {
-	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-		return int(key[0] - '1'), true
+func parseDigit(key string) (byte, bool) {
+	if len(key) == 1 && key[0] >= '0' && key[0] <= '9' {
+		return key[0], true
 	}
 	return 0, false
+}
+
+// indexJumpWindow is how long a typed digit waits for a follow-up digit
+// before the next one starts a fresh number.
+const indexJumpWindow = 600 * time.Millisecond
+
+type digitResetMsg struct{ seq int }
+
+// handleIndexDigit jumps to the 1-indexed row typed so far in the focused
+// pane. The jump happens immediately on each digit; a quick second digit
+// extends the number ("1","5" → row 15) when that row exists, otherwise it
+// starts over as a single digit.
+func (m Model) handleIndexDigit(d byte) (tea.Model, tea.Cmd) {
+	count := m.focusedPaneLen()
+	buf := string(d)
+	if m.digitBuf != "" && m.digitPane == m.focusPane {
+		if n, _ := strconv.Atoi(m.digitBuf + buf); n >= 1 && n <= count {
+			buf = m.digitBuf + buf
+		}
+	}
+	m.digitBuf = buf
+	m.digitPane = m.focusPane
+	m.digitSeq++
+	seq := m.digitSeq
+	reset := tea.Tick(indexJumpWindow, func(time.Time) tea.Msg { return digitResetMsg{seq: seq} })
+
+	n, _ := strconv.Atoi(buf)
+	if n < 1 || n > count {
+		return m, reset
+	}
+	idx := n - 1
+	switch m.focusPane {
+	case focusPaneEnvironments:
+		m.selectedEnv = idx
+		return m, tea.Batch(reset, m.captureCurrentWindowCmd())
+	case focusPaneAgents:
+		m.selectedAgent = idx
+	case focusPaneTemplates:
+		m.selectedTemplate = idx
+	case focusPaneWindows:
+		m.selectedWindow = idx
+		return m, tea.Batch(reset, m.captureCurrentWindowCmd())
+	}
+	return m, reset
+}
+
+func (m Model) focusedPaneLen() int {
+	switch m.focusPane {
+	case focusPaneEnvironments:
+		return len(m.environments)
+	case focusPaneAgents:
+		return len(m.agentItems())
+	case focusPaneTemplates:
+		return len(m.templates)
+	case focusPaneWindows:
+		return len(m.currentWindowNames())
+	}
+	return 0
 }
 
 func focusedPaneStatus(pane int) string {
@@ -626,7 +690,7 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 	case "T":
 		return m.openExtractTemplateMode()
 	case "t":
-		m.status = "Switch to [3] Templates panel for template actions"
+		m.status = "Switch to [t] Templates panel for template actions"
 		return m, nil
 	case "x":
 		return m.startKillSession()
@@ -636,7 +700,7 @@ func (m Model) updateEnvironmentPanelKey(key string) (tea.Model, tea.Cmd) {
 		// no-op: h/l have no meaning in the sessions panel
 		return m, nil
 	case "H", "L":
-		m.status = "Window reorder is available in [2] Windows panel"
+		m.status = "Window reorder is available in [w] Windows panel"
 		return m, nil
 	case "enter":
 		return m.startAttachSelected()
@@ -705,13 +769,13 @@ func (m Model) updateWindowPanelKey(key string) (tea.Model, tea.Cmd) {
 		m.moveWindow(1)
 		return m, m.captureCurrentWindowCmd()
 	case "x", "d":
-		m.status = "Switch to [1] Sessions panel for this action"
+		m.status = "Switch to [s] Sessions panel for this action"
 		return m, nil
 	case "c":
-		m.status = "Switch to [1] Sessions panel to create environments"
+		m.status = "Switch to [s] Sessions panel to create environments"
 		return m, nil
 	case "t", "e":
-		m.status = "Switch to [3] Templates panel for template actions"
+		m.status = "Switch to [t] Templates panel for template actions"
 		return m, nil
 	case "H":
 		return m.startMoveWindow(-1)
@@ -744,7 +808,7 @@ func (m Model) updateTemplatesPanelKey(key string) (tea.Model, tea.Cmd) {
 		// no-op: h/l have no meaning in the templates panel
 		return m, nil
 	case "x":
-		m.status = "Session kill is available in [1] Sessions panel"
+		m.status = "Session kill is available in [s] Sessions panel"
 		return m, nil
 	default:
 		return m, nil

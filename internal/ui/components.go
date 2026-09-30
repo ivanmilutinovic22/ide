@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // paneFocused reports whether the given pane is the active focus target.
@@ -17,14 +17,36 @@ func (m Model) paneFocused(pane int) bool {
 	return m.focusPane == pane
 }
 
-// numPrefix returns "[N]" for the first 9 list entries (1-indexed) so the
-// number can be typed as a shortcut, or three spaces otherwise to keep
-// rows column-aligned.
-func numPrefix(idx int) string {
-	if idx < 9 {
-		return fmt.Sprintf("[%d]", idx+1)
+// modalOpen reports whether a form or confirmation that edits config-backed
+// state is on screen; hot reload waits until it closes.
+func (m Model) modalOpen() bool {
+	return m.createMode || m.templateMode || m.envEditMode || m.extractMode || m.confirmMode
+}
+
+// listRowIndent is the left gutter renderListRow puts before row content
+// (selection bar, or one space).
+const listRowIndent = 1
+
+// listColumnWidth returns the display width of the widest name, capped at
+// max so a trailing column (status, window, count) stays aligned and visible.
+func listColumnWidth(names []string, limit int) int {
+	w := 0
+	for _, n := range names {
+		w = max(w, ansi.StringWidth(n))
 	}
-	return "   "
+	if limit > 0 && w > limit {
+		w = limit
+	}
+	return w
+}
+
+// padColumn fits s to exactly width cells: padded with spaces, or truncated
+// with an ellipsis when too long.
+func padColumn(s string, width int) string {
+	if ansi.StringWidth(s) > width {
+		s = ansi.Truncate(s, width, "…")
+	}
+	return s + strings.Repeat(" ", width-ansi.StringWidth(s))
 }
 
 // renderListRow paints a list row with the unified selection treatment:
@@ -42,12 +64,12 @@ func renderListRow(content string, selected bool, contentWidth int, theme uiThem
 			Foreground(lipgloss.Color(theme.Accent)).
 			Background(bg).
 			Render("▌")
-		return bar + renderStyledPaneLine(selectedStyle, " "+content, contentWidth-1)
+		return bar + renderStyledPaneLine(selectedStyle, content, contentWidth-1)
 	}
 	if defaultStyle != nil {
-		return renderStyledPaneLine(*defaultStyle, "  "+content, contentWidth)
+		return renderStyledPaneLine(*defaultStyle, " "+content, contentWidth)
 	}
-	return padLineToWidth("  "+content, contentWidth)
+	return padLineToWidth(" "+content, contentWidth)
 }
 
 // renderListPane composes a titled, scrollable list pane: pre-rendered rows
